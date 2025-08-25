@@ -1,0 +1,17 @@
+# Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+
+# Dataset 
+dataset/
+
+# Experiments
+resnet50/experiments/
