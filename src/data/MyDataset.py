@@ -14,8 +14,8 @@ class MyDataset(Dataset):
         df: pd.DataFrame,
         views: list[str],
         train_images: int = 0,
-        val_images: float = 0.0,
-        test_images: float = 0.0,
+        val_ratio: float = 0.0,
+        test_ratio: float = 0.0,
         seed: int = 3,
         transform = None,
         augment: bool = False,
@@ -24,8 +24,8 @@ class MyDataset(Dataset):
         self.views = views
         self.num_views = len(self.views)
         self.train_images = train_images
-        self.val_ratio = val_images
-        self.test_ratio = test_images
+        self.val_ratio = val_ratio
+        self.test_ratio = test_ratio
         self.min_images = train_images
         self.seed = seed
         self.transform = transform
@@ -112,12 +112,14 @@ class MyDataset(Dataset):
         s += f"Number of models: {self.num_models}\n"
         s += f"Train images per model per view: {self.train_images}\n"
         
-        val_per_model = len(self.val) // self.num_models if len(self.val) > 0 else 0
-        test_per_model = len(self.test) // self.num_models if len(self.test) > 0 else 0
-
-        s += f"Validation images per model per view: {val_per_model}\n"
-        s += f"Test images per model per view: {test_per_model}\n"
+        samples_per_model_val = np.array([len([p for m, p in self.val.samples if m == model]) for model in self.models])
+        samples_per_model_test = np.array([len([p for m, p in self.test.samples if m == model]) for model in self.models])
+               
         s += f"Val ratio = {self.val_ratio}, Test ratio = {self.test_ratio}\n"
+        s += f"Total validation images: {len(self.val)}\n"
+        s += f"Validation images per model per view: Mean {samples_per_model_val.mean()}, Std: {samples_per_model_val.std()}\n"
+        s += f"Total test images: {len(self.test)}\n"
+        s += f"Test images per model per view: Mean {samples_per_model_test.mean()}, Std: {samples_per_model_test.std()}\n"
 
         return s
 

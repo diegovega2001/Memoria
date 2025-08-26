@@ -10,6 +10,7 @@ from sklearn.metrics import (
     davies_bouldin_score
 )
 from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import NearestNeighbors
 import optuna
 from typing import Dict, List, Tuple, Any
 import warnings
@@ -41,7 +42,7 @@ class ClusteringAnalyzer:
         """Define parameter ranges for K-Means optimization."""
 
         return {
-            'n_clusters': (2, min(50, self.embeddings.shape[0] // 2)),
+            'n_clusters': (len(np.unique(self.true_labels)) // 2, len(np.unique(self.true_labels)) * 2),
             'init': ['k-means++', 'random'],
             'n_init': (10, 50)
         }
@@ -49,27 +50,36 @@ class ClusteringAnalyzer:
     def _get_dbscan_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for DBSCAN optimization."""
 
+        k = 4
+        neighbors = NearestNeighbors(n_neighbors=k).fit(self.embeddings_scaled)
+        distances, indices = neighbors.kneighbors(self.embeddings_scaled)
+        distances = np.sort(distances[:, k-1], axis=0)
+
+        eps_min = np.percentile(distances, 5)
+        eps_max = np.percentile(distances, 95)
+        
         return {
-            'eps': (0.1, 5.0),
-            'min_samples': (2, max(10, self.embeddings.shape[0] // 10))
+            'eps': (eps_min, eps_max),
+            'min_samples': (3, 15)
         }
     
     def _get_agglomerative_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for Agglomerative Clustering optimization."""
 
         return {
-            'n_clusters': (2, min(50, self.embeddings.shape[0] // 2)),
+            'n_clusters': (len(np.unique(self.true_labels)) // 2, len(np.unique(self.true_labels)) * 2),
             'linkage': ['ward', 'complete', 'average', 'single']
         }
     
     def _get_gaussian_mixture_params_range(self) -> Dict[str, Tuple]:
-        """Define parameter ranges for Gaussian Mixture optimization."""
+        """Define parameter ranges for gaussian Gaussian Mixture Clustering optimization."""
 
         return {
-            'n_components': (2, min(50, self.embeddings.shape[0] // 2)),
+            'n_components': (len(np.unique(self.true_labels)) // 2, len(np.unique(self.true_labels)) * 2),
             'covariance_type': ['full', 'tied', 'diag', 'spherical'],
             'init_params': ['kmeans', 'random']
         }
+
     
     def _create_clusterer(self, method: str, params: Dict[str, Any]):
         """Create clustering instance with given parameters."""
@@ -131,8 +141,13 @@ class ClusteringAnalyzer:
                 if n_clusters < 2 or (method == 'dbscan' and n_clusters == 1):  
                     return -1
                 
-                score = silhouette_score(self.embeddings_scaled, cluster_labels)
-                return score
+                silhouette = silhouette_score(self.embeddings_scaled, cluster_labels)
+                ari = adjusted_rand_score(self.true_labels, cluster_labels)
+                nmi = normalized_mutual_info_score(self.true_labels, cluster_labels)
+
+                combined_score = 0.2 * silhouette + 0.5 * ari + 0.3 * nmi
+
+                return combined_score
                 
             except Exception as e:
                 return -1

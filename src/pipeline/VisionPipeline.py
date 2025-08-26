@@ -26,23 +26,23 @@ class VisionPipeline:
         self.results = {}
         
     def load_data(self):
-        transforms = TransformConfig()
+        transforms = TransformConfig(grayscale=self.config.get('gray_scale', False))
         
         self.dataset = MyDataset(
             df=self.dataset_df,
             views=self.config.get('views', ['front']),
-            train_images=self.config.get('train_images', 6),
-            val_images=self.config.get('val_images', 0.5),
-            test_images=self.config.get('test_images', 0.5),
+            train_images=self.config.get('train_images', 5),
+            val_ratio=self.config.get('val_ratio', 0.5),
+            test_ratio=self.config.get('test_ratio', 0.5),
             seed=self.config.get('seed', 3),
             transform=transforms,
-            augment=self.config.get('augment', True)
+            augment=self.config.get('augment', False)
         )
 
         print(self.dataset) 
 
     def create_model(self):
-        device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
+        device = torch.device(self.config.get('device', 'cpu'))
         
         self.model = MyVisionModel(
             name=self.config.get('name', 'Vision Pipeline'),
@@ -162,7 +162,7 @@ class VisionPipeline:
         summary_df = visualizer.get_cluster_summary()
         
         visualizer.plot_embeddings_overview(reduction_method='tsne')
-        visualizer.visualize_good_clusters(n_clusters=self.config.get('clusters to visualize', 3), images_per_cluster=self.config.get('test_images'))
+        visualizer.visualize_good_clusters(n_clusters=self.config.get('clusters to visualize', 3), images_per_cluster=3)
         visualizer.visualize_mixed_clusters(n_clusters=self.config.get('clusters to visualize', 3), max_models_per_cluster=6)
         
         vis_results = {
@@ -225,11 +225,9 @@ class VisionPipeline:
             raise ValueError("No post-finetune embeddings. Run fine_tune() first")
             
         print("=== RUNNING POST-FINETUNE ===")
-
         self.run_dimensionality_reduction(phase='finetune')
         self.run_clustering(phase='finetune')
         self.visualize_results(phase='finetune')
-
         print("=== POST-FINETUNE COMPLETED ===")
     
     def compare_results(self):

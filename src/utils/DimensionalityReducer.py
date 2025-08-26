@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
+from sklearn.manifold import TSNE, trustworthiness
 from sklearn.metrics import silhouette_score
 import umap
 import optuna
@@ -41,10 +41,10 @@ class DimensionalityReducer:
         max_perplexity = min(50, self.embeddings.shape[0] // 3)
 
         return {
-            'n_components': (2, 10),
-            'perplexity': (5, max_perplexity),
-            'learning_rate': (10, 1000),
-            'max_iter': (250, 1000)
+            'n_components': (2, 3),
+            'perplexity': (15, max_perplexity),
+            'learning_rate': (50, 500),
+            'max_iter': (500, 1500)
         }
     
     def _get_umap_params_range(self) -> Dict[str, Tuple]:
@@ -53,10 +53,10 @@ class DimensionalityReducer:
         max_neighbors = min(200, self.embeddings.shape[0] - 1)
 
         return {
-            'n_components': (2, 50),
-            'n_neighbors': (5, max_neighbors),
-            'min_dist': (0.0, 0.9),
-            'learning_rate': (0.1, 5.0)
+            'n_components': (2, 30),
+            'n_neighbors': (15, max_neighbors),
+            'min_dist': (0.1, 0.8),
+            'learning_rate': (0.5, 3.0)
         }
     
     def _create_reducer(self, method: str, params: Dict[str, Any]):
@@ -105,9 +105,12 @@ class DimensionalityReducer:
                 
                 reducer = self._create_reducer(method, params)
                 reduced_embeddings = reducer.fit_transform(self.embeddings)
-                score = silhouette_score(reduced_embeddings, self.labels)
+                silhouette_val = silhouette_score(reduced_embeddings, self.labels)
+                trust_val = trustworthiness(self.embeddings, reduced_embeddings, n_neighbors=10)
+                combined_score = 0.9 * silhouette_val + 0.1 * trust_val
 
-                return score
+
+                return combined_score
                 
             except Exception as e:
                 return -1
@@ -147,8 +150,7 @@ class DimensionalityReducer:
             
             results[method] = reduced_embeddings            
             score = silhouette_score(reduced_embeddings, self.labels)
-            print(f" === {method.upper()} Silhouette Score: {score:.4f} === ")
-        
+                    
         self.results = results
 
         return results
