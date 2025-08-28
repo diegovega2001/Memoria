@@ -15,48 +15,43 @@ class DimensionalityReducer:
         embeddings: torch.Tensor,
         labels: torch.Tensor,
         seed: int = 3,
-        optimizer_trials: int = 50
+        optimizer_trials: int = 33,
+        available_methods: list = ['pca', 'umap']
     ):
         self.embeddings = embeddings.cpu().numpy() 
         self.labels = labels.numpy()
         self.seed = seed
         self.optimizer_trials = optimizer_trials
         
-        self.available_methods = ['pca', 'tsne', 'umap']
+        self.available_methods = available_methods
         self.results = {}
         self.best_params = {}
         
     def _get_pca_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for PCA optimization."""
 
-        max_components = min(self.embeddings.shape[0], self.embeddings.shape[1]) - 1
-
         return {
-            'n_components': (2, max_components)
+            'n_components': (0.9, 1.0)
         }
     
     def _get_tsne_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for t-SNE optimization."""
 
-        max_perplexity = min(50, self.embeddings.shape[0] // 3)
-
         return {
             'n_components': (2, 3),
-            'perplexity': (15, max_perplexity),
-            'learning_rate': (50, 500),
-            'max_iter': (500, 1500)
+            'perplexity': (5, 30),
+            'learning_rate': (10, 1000),
+            'max_iter': (750, 1250)
         }
     
     def _get_umap_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for UMAP optimization."""
 
-        max_neighbors = min(200, self.embeddings.shape[0] - 1)
-
         return {
-            'n_components': (2, 30),
-            'n_neighbors': (15, max_neighbors),
-            'min_dist': (0.1, 0.8),
-            'learning_rate': (0.5, 3.0)
+            'n_components': (2, 25),
+            'n_neighbors': (15, 100),
+            'min_dist': (0.0, 0.25),
+            'learning_rate': (0.5, 1.5)
         }
     
     def _create_reducer(self, method: str, params: Dict[str, Any]):
@@ -82,7 +77,7 @@ class DimensionalityReducer:
                 if method == 'pca':
                     param_ranges = self._get_pca_params_range()
                     params = {
-                        'n_components': trial.suggest_int('n_components', *param_ranges['n_components'])
+                        'n_components': trial.suggest_float('n_components', *param_ranges['n_components'])
                     }
                     
                 elif method == 'tsne':

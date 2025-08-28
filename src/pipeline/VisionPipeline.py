@@ -86,7 +86,8 @@ class VisionPipeline:
             embeddings=embeddings, 
             labels=labels, 
             seed=self.config.get('seed', 3),
-            optimizer_trials=self.config.get('optimizer_trials', 5)
+            optimizer_trials=self.config.get('optimizer_trials', 5),
+            available_methods=self.config.get('available reducer methods', ['pca'])
         )
         
         scores = reducer.compare_methods()
@@ -118,11 +119,11 @@ class VisionPipeline:
             embeddings=embeddings, 
             true_labels=labels, 
             seed=self.config.get('seed', 3),
-            optimizer_trials=self.config.get('optimizer_trials', 2)
+            optimizer_trials=self.config.get('optimizer_trials', 2),
+            available_methods=self.config.get('available clustering methods', ['agglomerative'])
         )
         
-        methods = ['kmeans', 'dbscan', 'agglomerative']
-        results = clustering.cluster_all(methods)
+        results = clustering.cluster_all()
         comparison_df = clustering.compare_methods()
         best_method, best_labels = clustering.get_best_result(metric='adjusted_rand_score')
         

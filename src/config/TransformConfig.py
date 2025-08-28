@@ -12,7 +12,7 @@ class TransformConfig:
         transform_list = []
         
         if self.grayscale:
-            transform_list.append(transforms.Grayscale(num_output_channels=1))
+            transform_list.append(transforms.Grayscale(num_output_channels=3))
         
         if self.resize:
             transform_list.append(transforms.Resize(self.resize))

@@ -22,7 +22,8 @@ class ClusteringAnalyzer:
         embeddings: np.ndarray,
         true_labels: np.ndarray,
         seed: int = 3,
-        optimizer_trials: int = 33
+        optimizer_trials: int = 33,
+        available_methods: list = ['kmeans', 'dbscan', 'agglomerative', 'gaussian_mixture']
     ):
         self.embeddings = embeddings
         self.true_labels = true_labels
@@ -33,7 +34,7 @@ class ClusteringAnalyzer:
         self.embeddings_scaled = scaler.fit_transform(self.embeddings)
         
         self.n_true_clusters = len(np.unique(self.true_labels))
-        self.available_methods = ['kmeans', 'dbscan', 'agglomerative', 'gaussian_mixture']
+        self.available_methods = available_methods
         self.results = {}
         self.best_params = {}
         self.cluster_labels = {}
@@ -42,9 +43,9 @@ class ClusteringAnalyzer:
         """Define parameter ranges for K-Means optimization."""
 
         return {
-            'n_clusters': (len(np.unique(self.true_labels)) // 2, len(np.unique(self.true_labels)) * 2),
-            'init': ['k-means++', 'random'],
-            'n_init': (10, 50)
+            'n_clusters': (self.n_true_clusters * 0.5, self.n_true_clusters),
+            'init': ['k-means++'],
+            'n_init': (10, 20)
         }
     
     def _get_dbscan_params_range(self) -> Dict[str, Tuple]:
@@ -55,19 +56,19 @@ class ClusteringAnalyzer:
         distances, indices = neighbors.kneighbors(self.embeddings_scaled)
         distances = np.sort(distances[:, k-1], axis=0)
 
-        eps_min = np.percentile(distances, 5)
-        eps_max = np.percentile(distances, 95)
+        eps_min = np.percentile(distances, 15)
+        eps_max = np.percentile(distances, 85)
         
         return {
             'eps': (eps_min, eps_max),
-            'min_samples': (3, 15)
+            'min_samples': (2, 10)
         }
     
     def _get_agglomerative_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for Agglomerative Clustering optimization."""
 
         return {
-            'n_clusters': (len(np.unique(self.true_labels)) // 2, len(np.unique(self.true_labels)) * 2),
+            'n_clusters': (self.n_true_clusters * 0.5, self.n_true_clusters),
             'linkage': ['ward', 'complete', 'average', 'single']
         }
     
@@ -75,9 +76,9 @@ class ClusteringAnalyzer:
         """Define parameter ranges for gaussian Gaussian Mixture Clustering optimization."""
 
         return {
-            'n_components': (len(np.unique(self.true_labels)) // 2, len(np.unique(self.true_labels)) * 2),
+            'n_components': (self.n_true_clusters * 0.5, self.n_true_clusters),
             'covariance_type': ['full', 'tied', 'diag', 'spherical'],
-            'init_params': ['kmeans', 'random']
+            'init_params': ['kmeans']
         }
 
     
