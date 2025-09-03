@@ -71,10 +71,13 @@ class MyDataset(Dataset):
             model_views_df = self.df[(self.df['model'] == model) & (self.df['viewpoint'].isin(self.views))]
             grouped = model_views_df.groupby('viewpoint')
             view_images = {view: list(grouped.get_group(view)['image_path']) for view in self.views}
+            min_view_images = min(len(view_images[view]) for view in self.views)
 
             random.seed(self.seed)
+            
             for view in self.views:
                 random.shuffle(view_images[view])
+                view_images[view] = view_images[view][:min_view_images]
 
             train_paths = [view_images[v][:self.train_images] for v in self.views]
             remaining_paths = [view_images[v][self.train_images:] for v in self.views]
