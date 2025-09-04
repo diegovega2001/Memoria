@@ -6,6 +6,11 @@ from sklearn.preprocessing import LabelEncoder
 from PIL import Image
 import torchvision.transforms.functional as F
 import torch
+import warnings
+import logging
+
+warnings.filterwarnings('ignore')
+logging.basicConfig(level=logging.INFO)
 
 
 class MyDataset(Dataset):
@@ -41,6 +46,7 @@ class MyDataset(Dataset):
         self.train, self.val, self.test = self._init_split_()
 
     def _init_models(self):
+        """Models of the cars from the dataset"""
         counts = (
             self.df.groupby(["model", "viewpoint"])
             .size()
@@ -52,19 +58,22 @@ class MyDataset(Dataset):
         return models
     
     def _init_label_encoder(self):
+        """Label encoder for the dataset"""
         label_encoder = LabelEncoder()
         label_encoder.fit(self.models)
         return label_encoder
     
     def _update_df(self):
+        """Updates the original DataFrame for a new one with the only the models and viewpoints whe want"""
         updated_df = self.df.copy()
         updated_df = updated_df[
-            (updated_df["model"].isin(self.models))
-            & (updated_df["viewpoint"].isin(self.views))
+                        (updated_df["model"].isin(self.models))
+                        & (updated_df["viewpoint"].isin(self.views))
         ]
         return updated_df
 
     def _init_split_(self):
+        """Create thee splits for the dataset. Train, Val and Test"""
         train_samples, val_samples, test_samples = [], [], []
 
         for model in self.models:
@@ -106,7 +115,6 @@ class MyDataset(Dataset):
         train_dataset = SplitDataset(train_samples, self.label_encoder, self.transform, self.augment)
         val_dataset   = SplitDataset(val_samples,   self.label_encoder, self.transform, False)
         test_dataset  = SplitDataset(test_samples,  self.label_encoder, self.transform, False)
-        
         return train_dataset, val_dataset, test_dataset
     
     def __str__(self):
@@ -123,9 +131,7 @@ class MyDataset(Dataset):
         s += f"Validation images per model per view: Mean {samples_per_model_val.mean()}, Std: {samples_per_model_val.std()}\n"
         s += f"Total test images: {len(self.test)}\n"
         s += f"Test images per model per view: Mean {samples_per_model_test.mean()}, Std: {samples_per_model_test.std()}\n"
-
         return s
-
 
 
 class SplitDataset(Dataset):

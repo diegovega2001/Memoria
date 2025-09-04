@@ -6,8 +6,15 @@ from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 import umap
 from typing import Dict, List, Tuple
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import warnings
+import logging
+
+
 warnings.filterwarnings('ignore')
+logging.basicConfig(level=logging.INFO)
+
 
 class ClusterVisualizer:
     def __init__(
@@ -66,7 +73,6 @@ class ClusterVisualizer:
         s: int = 50
     ):
         """Plot overview of embeddings in 2D space."""
-        
         if reduction_method == 'tsne':
             reducer = TSNE(n_components=2, random_state=self.seed, perplexity=min(30, len(self.embeddings)//4))
         elif reduction_method == 'pca':
@@ -97,7 +103,6 @@ class ClusterVisualizer:
         axes[1].set_xlabel(f'{reduction_method.upper()} Component 1')
         axes[1].set_ylabel(f'{reduction_method.upper()} Component 2')
         plt.colorbar(scatter2, ax=axes[1])
-        
         plt.tight_layout()
         plt.show()
         
@@ -136,11 +141,11 @@ class ClusterVisualizer:
         pure_clusters.sort(key=lambda x: x[1]['size'], reverse=True) 
         
         if len(pure_clusters) == 0:
-            print("No pure clusters found!")
+            logging.info("No pure clusters found!")
             return
         
         n_clusters = min(n_clusters, len(pure_clusters))
-        
+
         fig, axes = plt.subplots(n_clusters, 1, figsize=(figsize_per_cluster[0], figsize_per_cluster[1] * n_clusters))
         if n_clusters == 1:
             axes = [axes]
@@ -202,11 +207,11 @@ class ClusterVisualizer:
         mixed_clusters.sort(key=lambda x: x[1]['n_unique_models'], reverse=True)
         
         if len(mixed_clusters) == 0:
-            print("No mixed clusters found!")
+            logging.info("No mixed clusters found!")
             return
         
         n_clusters = min(n_clusters, len(mixed_clusters))
-        
+
         fig, axes = plt.subplots(n_clusters, 1, figsize=(figsize_per_cluster[0], figsize_per_cluster[1] * n_clusters))
         if n_clusters == 1:
             axes = [axes]
@@ -266,22 +271,21 @@ class ClusterVisualizer:
         total_clusters = len(self.cluster_analysis)
         pure_clusters = sum(1 for info in self.cluster_analysis.values() if info['is_pure'])
         mixed_clusters = total_clusters - pure_clusters
-        
-        print("CLUSTERING STATISTICS")
-        print("=" * 40)
-        print(f"Total clusters: {total_clusters}")
-        print(f"Pure clusters: {pure_clusters} ({pure_clusters/total_clusters*100:.1f}%)")
-        print(f"Mixed clusters: {mixed_clusters} ({mixed_clusters/total_clusters*100:.1f}%)")
+        logging.info("CLUSTERING STATISTICS")
+        logging.info("=" * 40)
+        logging.info(f"Total clusters: {total_clusters}")
+        logging.info(f"Pure clusters: {pure_clusters} ({pure_clusters/total_clusters*100:.1f}%)")
+        logging.info(f"Mixed clusters: {mixed_clusters} ({mixed_clusters/total_clusters*100:.1f}%)")
         
         if mixed_clusters > 0:
             avg_models_per_mixed = np.mean([
                 info['n_unique_models'] for info in self.cluster_analysis.values() 
                 if not info['is_pure']
             ])
-            print(f"Avg models per mixed cluster: {avg_models_per_mixed:.1f}")
+            logging.info(f"Avg models per mixed cluster: {avg_models_per_mixed:.1f}")
         
         if mixed_clusters > 0:
-            print(f"\nMost mixed clusters:")
+            logging.info(f"\nMost mixed clusters:")
             mixed_info = [
                 (cluster_id, info) for cluster_id, info in self.cluster_analysis.items()
                 if not info['is_pure']
@@ -289,4 +293,4 @@ class ClusterVisualizer:
             mixed_info.sort(key=lambda x: x[1]['n_unique_models'], reverse=True)
             
             for cluster_id, info in mixed_info[:3]:
-                print(f"  Cluster {cluster_id}: {info['n_unique_models']} models, purity: {info['purity']:.3f}")
+                logging.info(f"  Cluster {cluster_id}: {info['n_unique_models']} models, purity: {info['purity']:.3f}")

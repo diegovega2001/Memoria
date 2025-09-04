@@ -5,6 +5,12 @@ from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 from src.data.MyDataset import MyDataset
+import warnings
+import logging
+
+warnings.filterwarnings('ignore')
+logging.basicConfig(level=logging.INFO)
+
 
 class MyVisionModel():
     def __init__(
@@ -39,7 +45,8 @@ class MyVisionModel():
                 * Device = {self.device}
                 * Batch size = {self.batch_size}"""
 
-    def _init_replace_last_layer(self):
+    def _init_replace_last_layer(self)->None:
+        """Method for replacing the last layer, for getting the embeddings"""
         if hasattr(self.model, "fc"):  
             self.embedding_dim = self.model.fc.in_features
             self.model.fc = torch.nn.Identity()
@@ -48,10 +55,11 @@ class MyVisionModel():
             self.model.heads = torch.nn.Identity()
 
     def _init_classification_layer(self) -> torch.nn.Module:
+        """Method for setting a new classification layer"""
         return torch.nn.Linear(self.embedding_dim * self.dataset.num_views, self.dataset.num_models)
 
-
     def extract_embeddings(self, dataloader) -> torch.Tensor:
+        """Embeddings extractor of the model"""
         self.model.to(self.device)
         self.model.eval()
         with torch.no_grad():
@@ -68,6 +76,7 @@ class MyVisionModel():
         return torch.tensor(scaled_embeddings, dtype=torch.float32)
 
     def extract_test_embeddings(self) -> torch.Tensor:
+        """Extract test embeddings for trials"""
         return self.extract_embeddings(self.test_loader)
 
     def finetune(
@@ -77,6 +86,7 @@ class MyVisionModel():
         Epochs: int,
         WarmUpEpochs: int = 0
     ) -> None:
+        """Fine tuning method"""
         def get_warmup_scheduler(optimizer, warmup_epochs, total_epochs):
             def lr_lambda(current_epoch):
                 return float(current_epoch + 1) / warmup_epochs if current_epoch < warmup_epochs else 1.0
@@ -126,9 +136,10 @@ class MyVisionModel():
             avg_train_loss = train_loss / len(self.train_loader)
             avg_val_loss = val_loss / len(self.val_loader)
             val_acc = 100 * correct / total
-            print(f'Epoch {epoch+1}/{Epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.2f}%')
+            logging.info(f'Epoch {epoch+1}/{Epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.2f}%')
 
     def save(self) -> None:
+        """Save the results of the fine tuning process"""
         os.makedirs(f'FineTunningResults/{self.name}', exist_ok=True)
         torch.save(
             {

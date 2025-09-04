@@ -1,6 +1,12 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from torchvision import transforms
+import warnings
+import logging
+
+warnings.filterwarnings('ignore')
+logging.basicConfig(level=logging.INFO)
+
 
 @dataclass
 class TransformConfig:
