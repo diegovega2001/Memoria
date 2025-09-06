@@ -9,9 +9,11 @@ __pycache__/
 # Jupyter checkpoints
 .ipynb_checkpoints/
 
-
 # Dataset 
 dataset/
 
 # Experiments
 resnet50/experiments/
+
+# Virtual enviromet
+venv/
