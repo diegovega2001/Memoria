@@ -273,7 +273,7 @@ class VisionPipeline:
             self.run_post_finetune()
             self.compare_results()
     
-    def save_results(self, experiment_name, save_dir='experiments'):
+    def save_results(self, experiment_name, save_dir='results'):
         """Save all automatically"""
         os.makedirs(save_dir, exist_ok=True)
         

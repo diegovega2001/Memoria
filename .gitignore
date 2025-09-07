@@ -12,8 +12,8 @@ __pycache__/
 # Dataset 
 dataset/
 
-# Experiments
-resnet50/experiments/
+# ResNet50
+ResNet50/
 
 # Virtual enviromet
 venv/

@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, MiniBatchKMeans
-from sklearn.mixture import GaussianMixture
 from sklearn.metrics import (
     silhouette_score, 
     adjusted_rand_score, 
@@ -55,7 +54,7 @@ class ClusteringAnalyzer:
         true_labels: np.ndarray,
         seed: int = 3,
         optimizer_trials: int = 50,
-        available_methods: list = ['kmeans', 'dbscan', 'agglomerative', 'gaussian_mixture'],
+        available_methods: list = ['kmeans', 'dbscan', 'agglomerative'],
         n_jobs: int = -1,
         use_mini_batch: bool = True
     ):
@@ -78,49 +77,72 @@ class ClusteringAnalyzer:
 
     def _get_kmeans_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for K-Means optimization."""
-        min_clusters = self.n_true_clusters * 0.5
-        max_clusters = self.n_true_clusters * 1.5
+        reduced_dims = self.embeddings.shape[-1]
+
+        min_clusters = int(self.n_true_clusters * 0.75)
+        max_clusters = int(self.n_true_clusters * 1.25)
+        
+        if reduced_dims <= 3:
+            n_init_range = (20, 100)
+        elif reduced_dims <= 10:
+            n_init_range = (10, 50)
+        else:
+            n_init_range = (5, 20)
+            
+        if self.use_mini_batch:
+            n_init_range = (max(3, n_init_range[0] // 3), n_init_range[1] // 2)
+        
         return {
             'n_clusters': (min_clusters, max_clusters),
             'init': ['k-means++', 'random'],
-            'n_init': (10, 50) if not self.use_mini_batch else (3, 10)
+            'n_init': n_init_range
         }
     
     def _get_dbscan_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for DBSCAN optimization."""
-        k = 4
-
+        n_samples = self.embeddings.shape[0]
+        reduced_dims = self.embeddings.shape[-1]
+        
+        k = min(4, max(2, int(np.sqrt(n_samples) // 10)))
+        
         neighbors = NearestNeighbors(n_neighbors=k, n_jobs=self.n_jobs)
         neighbors.fit(self.embeddings)
         distances, indices = neighbors.kneighbors(self.embeddings)
-        distances = np.sort(distances[:, k-1])
-
-        eps_min = max(0.01, np.percentile(distances, 10))
-        eps_max = min(2.0, np.percentile(distances, 90))
+        k_distances = np.sort(distances[:, k-1])
+        
+        if reduced_dims <= 3:
+            base_eps_min, base_eps_max = 0.1, 5.0
+        elif reduced_dims <= 10:
+            base_eps_min, base_eps_max = 0.05, 3.0
+        else:
+            base_eps_min, base_eps_max = 0.01, 2.0
+        
+        eps_min = min(base_eps_min, np.percentile(k_distances, 5))
+        eps_max = max(base_eps_max, np.percentile(k_distances, 95))
+        min_samples_max = min(25, max(5, n_samples // 50))
         return {
             'eps': (eps_min, eps_max),
-            'min_samples': (2, 25)
+            'min_samples': (2, min_samples_max)
         }
     
     def _get_agglomerative_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for Agglomerative Clustering optimization."""
-        min_clusters = self.n_true_clusters * 0.5
-        max_clusters = self.n_true_clusters * 1.5
+        reduced_dims = self.embeddings.shape[-1]
+
+        min_clusters = int(self.n_true_clusters * 0.75)
+        max_clusters = int(self.n_true_clusters * 1.25)
+        
+        if reduced_dims <= 3:
+            linkage_options = ['ward', 'complete', 'average']
+        elif reduced_dims <= 10:
+            linkage_options = ['ward', 'complete', 'average', 'single']
+        else:
+            linkage_options = ['ward', 'complete']
+        
         return {
             'n_clusters': (min_clusters, max_clusters),
-            'linkage': ['ward', 'complete', 'average', 'single']
+            'linkage': linkage_options
         }
-    
-    def _get_gaussian_mixture_params_range(self) -> Dict[str, Tuple]:
-        """Define parameter ranges for gaussian Gaussian Mixture Clustering optimization."""
-        min_components = self.n_true_clusters * 0.5
-        max_components = self.n_true_clusters * 1.5
-        return {
-            'n_components': (min_components, max_components),
-            'covariance_type': ['full', 'tied', 'diag', 'spherical'],
-            'init_params': ['kmeans', 'random']
-        }
-
     
     def _create_clusterer(self, method: str, params: Dict[str, Any]):
         """Create clustering instance with given parameters."""
@@ -132,19 +154,20 @@ class ClusteringAnalyzer:
                     batch_size=batch_size,
                     **params
                 )
-            else: KMeans(
-                random_state=self.seed,
-                n_jobs=self.n_jobs, 
-                **params)
+            else: 
+                return KMeans(
+                    random_state=self.seed,
+                    **params
+                )
         
         elif method == 'dbscan':
-            return DBSCAN(n_jobs=self.n_jobs, **params)
+            return DBSCAN(
+                        n_jobs=self.n_jobs, 
+                        **params
+            )
         
         elif method == 'agglomerative':
             return AgglomerativeClustering(**params)
-        
-        elif method == 'gaussian_mixture':
-            return GaussianMixture(random_state=self.seed, max_iter=100, **params)
 
         else:
             raise ValueError(f"Unknown method: {method}")
@@ -175,13 +198,6 @@ class ClusteringAnalyzer:
                         'linkage': trial.suggest_categorical('linkage', param_ranges['linkage'])
                     }
                     
-                elif method == 'gaussian_mixture':
-                    param_ranges = self._get_gaussian_mixture_params_range()
-                    params = {
-                        'n_components': trial.suggest_int('n_components', *param_ranges['n_components']),
-                        'covariance_type': trial.suggest_categorical('covariance_type', param_ranges['covariance_type']),
-                        'init_params': trial.suggest_categorical('init_params', param_ranges['init_params'])
-                    }
                 
                 clusterer = self._create_clusterer(method, params)
                 cluster_labels = clusterer.fit_predict(self.embeddings)
@@ -286,11 +302,6 @@ class ClusteringAnalyzer:
             'agglomerative': {
                 'n_clusters': self.n_true_clusters, 
                 'linkage': 'ward'
-            },
-            'gaussian_mixture': {
-                'n_components': self.n_true_clusters, 
-                'covariance_type': 'diag',  
-                'init_params': 'kmeans'
             }
         }
         return defaults.get(method, {})
