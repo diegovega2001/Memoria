@@ -64,10 +64,10 @@ class DimensionalityReducer:
         n_samples = self.embeddings.shape[0]
         n_features = self.embeddings.shape[-1]
 
-        max_possible = min(n_features, n_samples - 1)
+        max_possible = min(n_features//2, n_samples - 1)
         
-        min_components = max(2, min(50, max_possible // 4))
-        max_components = min(max_possible, min(200, n_features // 2))
+        min_components = max(2, min(50, max_possible // 2))
+        max_components = max_possible
         return {'n_components': (min_components, max_components)}
     
     def _get_tsne_params_range(self) -> Dict[str, Tuple]:
@@ -87,13 +87,11 @@ class DimensionalityReducer:
     def _get_umap_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for UMAP optimization."""
         n_samples = self.embeddings.shape[0]
-        n_features = self.embeddings.shape[-1]
         
         neighbors_min = max(5, min(15, n_samples // 100))
         neighbors_max = min(100, n_samples // 10)
-        components_max = min(50, n_features // 10)
         return {
-            'n_components': (2, components_max),
+            'n_components': (2, 60),
             'n_neighbors': (neighbors_min, neighbors_max),
             'min_dist': (0.0, 0.3),
             'learning_rate': (0.5, 2.0),
