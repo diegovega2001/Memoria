@@ -198,11 +198,12 @@ class VisionPipeline:
         optimizer_type = self.config.get('finetune optimizer type', 'Adam')
         base_lr = self.config.get('finetune optimizer lr', 1e-4)
         head_lr = self.config.get('finetune optimizer head_lr', 1e-3)
+        weight_decay = self.config.get('finetune optimizer weight_decay', 1e-4)  
         
         optimizer_cls = getattr(torch.optim, optimizer_type)
         optimizer_params = [
-            {"params": self.model.model.parameters(), "lr": base_lr}, 
-            {"params": self.model.classification_layer.parameters(), "lr": head_lr}  
+            {"params": self.model.model.parameters(), "lr": base_lr, "weight_decay": weight_decay}, 
+            {"params": self.model.classification_layer.parameters(), "lr": head_lr, "weight_decay": weight_decay}  
         ]
         optimizer = optimizer_cls(optimizer_params)
 
