@@ -56,7 +56,10 @@ class MyVisionModel():
 
     def _init_classification_layer(self) -> torch.nn.Module:
         """Method for setting a new classification layer"""
-        return torch.nn.Linear(self.embedding_dim * self.dataset.num_views, self.dataset.num_models)
+        head_layer = torch.nn.Linear(self.embedding_dim * self.dataset.num_views, self.dataset.num_models)
+        torch.nn.init.xavier_uniform_(head_layer.weight)
+        torch.nn.init.constant_(head_layer.bias, 0)
+        return head_layer
 
     def extract_embeddings(self, dataloader) -> torch.Tensor:
         """Embeddings extractor of the model"""
