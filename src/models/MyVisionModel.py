@@ -137,12 +137,3 @@ class MyVisionModel():
             avg_val_loss = val_loss / len(self.val_loader)
             val_acc = 100 * correct / total
             logging.info(f'Epoch {epoch+1}/{Epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.2f}%')
-
-    def save(self) -> None:
-        """Save the results of the fine tuning process"""
-        os.makedirs(f'FineTunningResults/{self.name}', exist_ok=True)
-        torch.save(
-            {
-                'state_dict': self.model.state_dict(),
-                'classification_layer_state_dict': self.classification_layer.state_dict()
-            }, f'FineTunningResults/{self.name}/model.pth')

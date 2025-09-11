@@ -302,6 +302,12 @@ class VisionPipeline:
         with open(os.path.join(experiment_path, 'results.pkl'), 'wb') as f:
             pickle.dump(self.results, f)
         
+        if self.model is not None:
+            model_path = os.path.join(experiment_path, 'model.pth')
+            torch.save({
+                'state_dict': self.model.model.state_dict(),
+                'classification_layer_state_dict': self.model.classification_layer.state_dict()
+            }, model_path)
         logging.info(f" === Results saved to: {experiment_path} ===")
         return experiment_path
     
