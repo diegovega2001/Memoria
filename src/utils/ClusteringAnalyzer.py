@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, MiniBatchKMeans
+from sklearn.cluster import DBSCAN, AgglomerativeClustering, OPTICS
 from sklearn.metrics import (
     silhouette_score, 
     adjusted_rand_score, 
@@ -8,10 +8,10 @@ from sklearn.metrics import (
     calinski_harabasz_score,
     davies_bouldin_score
 )
-from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
+import hdbscan
 import optuna
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Dict, List, Tuple, Any
 import warnings
 import logging
 import gc
@@ -54,9 +54,8 @@ class ClusteringAnalyzer:
         true_labels: np.ndarray,
         seed: int = 3,
         optimizer_trials: int = 50,
-        available_methods: list = ['kmeans', 'dbscan', 'agglomerative'],
-        n_jobs: int = -1,
-        use_mini_batch: bool = True
+        available_methods: list = ['dbscan', 'hdbscan', 'optics', 'agglomerative'],
+        n_jobs: int = -1
     ):
         self.embeddings = embeddings.astype(np.float32)
         self.true_labels = true_labels.cpu().numpy().astype(np.float32)
@@ -64,47 +63,43 @@ class ClusteringAnalyzer:
         self.optimizer_trials = optimizer_trials
 
         self.available_methods = available_methods
-        self.use_mini_batch = use_mini_batch
         self.n_jobs = n_jobs if n_jobs != -1 else mp.cpu_count() - 1
         
         self.n_true_clusters = len(np.unique(self.true_labels))
-        self.available_methods = available_methods
-
         self.results = {}
         self.best_params = {}
         self.cluster_labels = {}
         logging.info(f"Initialized clustering with {len(self.embeddings)} samples, {self.n_true_clusters} true clusters")
-
-    def _get_kmeans_params_range(self) -> Dict[str, Tuple]:
-        """Define parameter ranges for K-Means optimization."""
-        reduced_dims = self.embeddings.shape[-1]
-
-        min_clusters = int(self.n_true_clusters * 0.75)
-        max_clusters = int(self.n_true_clusters * 1.25)
-        
-        if reduced_dims <= 3:
-            n_init_range = (20, 100)
-        elif reduced_dims <= 10:
-            n_init_range = (10, 50)
-        else:
-            n_init_range = (5, 20)
-            
-        if self.use_mini_batch:
-            n_init_range = (max(3, n_init_range[0] // 3), n_init_range[1] // 2)
-        
-        return {
-            'n_clusters': (min_clusters, max_clusters),
-            'init': ['k-means++', 'random'],
-            'n_init': n_init_range
+    
+    def _get_default_params(self, method: str) -> Dict[str, Any]:
+        """Get default parameters for each clustering method."""
+        defaults = {
+            'dbscan': {
+                'eps': 0.5,
+                'min_samples': 5
+            },
+            'hdbscan': {
+                'min_cluster_size': 5,
+                'min_samples': 1
+            },
+            'optics': {
+                'min_samples': 5,
+                'xi': 0.05,
+                'min_cluster_size': 5
+            },
+            'agglomerative': {
+                'distance_threshold': 1.0,
+                'linkage': 'ward',
+                'n_clusters': None
+            }
         }
+        return defaults.get(method, {})
     
     def _get_dbscan_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for DBSCAN optimization."""
         n_samples = self.embeddings.shape[0]
         reduced_dims = self.embeddings.shape[-1]
-        
         k = min(4, max(2, int(np.sqrt(n_samples) // 10)))
-        
         neighbors = NearestNeighbors(n_neighbors=k, n_jobs=self.n_jobs)
         neighbors.fit(self.embeddings)
         distances, indices = neighbors.kneighbors(self.embeddings)
@@ -125,80 +120,73 @@ class ClusteringAnalyzer:
             'min_samples': (2, min_samples_max)
         }
     
+    def _get_hdbscan_params_range(self) -> Dict[str, Tuple]:
+        n_samples = self.embeddings.shape[0]
+        return {
+            'min_cluster_size': (2, max(30, n_samples // 100)),
+            'min_samples': (1, 10)
+        }
+
+    def _get_optics_params_range(self) -> Dict[str, Tuple]:
+        n_samples = self.embeddings.shape[0]
+        return {
+            'min_samples': (2, min(25, n_samples // 50)),
+            'xi': (0.01, 0.1),
+            'min_cluster_size': (2, max(30, n_samples // 100))
+        }
+
     def _get_agglomerative_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for Agglomerative Clustering optimization."""
-        reduced_dims = self.embeddings.shape[-1]
-
-        min_clusters = int(self.n_true_clusters * 0.75)
-        max_clusters = int(self.n_true_clusters * 1.25)
-        
-        if reduced_dims <= 3:
-            linkage_options = ['ward', 'complete', 'average']
-        elif reduced_dims <= 10:
-            linkage_options = ['ward', 'complete', 'average', 'single']
-        else:
-            linkage_options = ['ward', 'complete']
-        
         return {
-            'n_clusters': (min_clusters, max_clusters),
-            'linkage': linkage_options
+            'distance_threshold': (0.1, 5.0),  
+            'linkage': ['ward', 'complete', 'average', 'single']
         }
-    
-    def _create_clusterer(self, method: str, params: Dict[str, Any]):
-        """Create clustering instance with given parameters."""
-        if method == 'kmeans':
-            if self.use_mini_batch:
-                batch_size = 1000
-                return MiniBatchKMeans(
-                    random_state=self.seed,
-                    batch_size=batch_size,
-                    **params
-                )
-            else: 
-                return KMeans(
-                    random_state=self.seed,
-                    **params
-                )
-        
-        elif method == 'dbscan':
-            return DBSCAN(
-                        n_jobs=self.n_jobs, 
-                        **params
-            )
-        
-        elif method == 'agglomerative':
-            return AgglomerativeClustering(**params)
 
+    def _create_clusterer(self, method: str, params: Dict[str, Any]):
+        if method == 'dbscan':
+           return DBSCAN(n_jobs=self.n_jobs, **params)
+        elif method == 'hdbscan':
+          return hdbscan.HDBSCAN(**params, core_dist_n_jobs=self.n_jobs)
+        elif method == 'optics':
+          return OPTICS(n_jobs=self.n_jobs, **params)
+        elif method == 'agglomerative':
+          return AgglomerativeClustering(**params)
         else:
-            raise ValueError(f"Unknown method: {method}")
+          raise ValueError(f"Unknown method: {method}")
     
-    def optimize_parameters(self, method: str) -> Dict[str, Any]:
+    def _optimize_parameters(self, method: str) -> Dict[str, Any]:
         """Optimize hyperparameters for a specific clustering method using Optuna."""
         def objective(trial):
             try:
-                if method == 'kmeans':
-                    param_ranges = self._get_kmeans_params_range()
-                    params = {
-                        'n_clusters': trial.suggest_int('n_clusters', *param_ranges['n_clusters']),
-                        'init': trial.suggest_categorical('init', param_ranges['init']),
-                        'n_init': trial.suggest_int('n_init', *param_ranges['n_init'])
-                    }
-                    
-                elif method == 'dbscan':
+                if method == 'dbscan':
                     param_ranges = self._get_dbscan_params_range()
                     params = {
                         'eps': trial.suggest_float('eps', *param_ranges['eps']),
                         'min_samples': trial.suggest_int('min_samples', *param_ranges['min_samples'])
                     }
-                    
+                elif method == 'hdbscan':
+                    param_ranges = self._get_hdbscan_params_range()
+                    params = {
+                        'min_cluster_size': trial.suggest_int('min_cluster_size', *param_ranges['min_cluster_size']),
+                        'min_samples': trial.suggest_int('min_samples', *param_ranges['min_samples'])
+                    }
+                elif method == 'optics':
+                    param_ranges = self._get_optics_params_range()
+                    params = {
+                        'min_samples': trial.suggest_int('min_samples', *param_ranges['min_samples']),
+                        'xi': trial.suggest_float('xi', *param_ranges['xi']),
+                        'min_cluster_size': trial.suggest_int('min_cluster_size', *param_ranges['min_cluster_size'])
+                    }
                 elif method == 'agglomerative':
                     param_ranges = self._get_agglomerative_params_range()
                     params = {
-                        'n_clusters': trial.suggest_int('n_clusters', *param_ranges['n_clusters']),
-                        'linkage': trial.suggest_categorical('linkage', param_ranges['linkage'])
+                        'distance_threshold': trial.suggest_float(
+                            'distance_threshold', 
+                            *param_ranges['distance_threshold']
+                        ),
+                        'linkage': trial.suggest_categorical('linkage', param_ranges['linkage']),
+                        'n_clusters': None 
                     }
-                    
-                
                 clusterer = self._create_clusterer(method, params)
                 cluster_labels = clusterer.fit_predict(self.embeddings)
                 
@@ -238,7 +226,6 @@ class ClusteringAnalyzer:
             )
         except KeyboardInterrupt:
             logging.info("Optimization interrupted by user")
-
         logging.info(f"Optimization completed for {method}. Best value: {study.best_value:.4f}")
         return study.best_params
     
@@ -246,7 +233,7 @@ class ClusteringAnalyzer:
         """Apply clustering with given or optimized parameters."""
         if params is None:
             logging.info(f"Optimizing parameters for {method.upper()}...")
-            params = self.optimize_parameters(method)
+            params = self._optimize_parameters(method)
             self.best_params[method] = params
             logging.info(f"Best params for {method}: {params}")
         
@@ -287,29 +274,9 @@ class ClusteringAnalyzer:
         self.results = results
         return results
     
-    def _get_default_params(self, method: str) -> Dict[str, Any]:
-        """Get default parameters for each clustering method."""
-        defaults = {
-            'kmeans': {
-                'n_clusters': self.n_true_clusters, 
-                'init': 'k-means++', 
-                'n_init': 10 if not self.use_mini_batch else 3
-            },
-            'dbscan': {
-                'eps': 0.5, 
-                'min_samples': 5
-            },
-            'agglomerative': {
-                'n_clusters': self.n_true_clusters, 
-                'linkage': 'ward'
-            }
-        }
-        return defaults.get(method, {})
-    
     def evaluate_clustering(self, cluster_labels: np.ndarray, method_name: str = "") -> Dict[str, float]:
         """Evaluate clustering quality using multiple metrics."""
         metrics = {}
-        
         valid_mask = cluster_labels != -1
         n_valid = np.sum(valid_mask)
 

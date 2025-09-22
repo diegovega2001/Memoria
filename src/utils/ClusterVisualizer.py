@@ -74,7 +74,11 @@ class ClusterVisualizer:
     ):
         """Plot overview of embeddings in 2D space."""
         if reduction_method == 'tsne':
-            reducer = TSNE(n_components=2, random_state=self.seed, perplexity=min(30, len(self.embeddings)//4))
+            if len(self.embeddings) < 4:
+                reduction_method = 'pca'
+                reducer = PCA(n_components=2, random_state=self.seed)
+            else:
+                reducer = TSNE(n_components=2, random_state=self.seed, perplexity=min(30, len(self.embeddings)//4))
         elif reduction_method == 'pca':
             reducer = PCA(n_components=2, random_state=self.seed)
         elif reduction_method == 'umap':
@@ -105,7 +109,6 @@ class ClusterVisualizer:
         plt.colorbar(scatter2, ax=axes[1])
         plt.tight_layout()
         plt.show()
-        
         return embeddings_2d
     
     def get_cluster_summary(self) -> pd.DataFrame:

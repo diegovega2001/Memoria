@@ -1,5 +1,6 @@
 import os
 import torch
+import torch.nn as nn
 import torchvision.models as models
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
@@ -12,7 +13,7 @@ warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
 
 
-class MyVisionModel():
+class MyVisionModel(torch.nn.Module):
     def __init__(
         self,
         name: str,
@@ -22,6 +23,7 @@ class MyVisionModel():
         dataset: MyDataset,
         batch_size: int,
     ):
+        super().__init__()
         self.name = name
         self.model_name = model_name
         self.weights = weights
@@ -38,6 +40,7 @@ class MyVisionModel():
         self.embedding_dim = None
         self._init_replace_last_layer()
         self.classification_layer = self._init_classification_layer()
+        self.to(self.device)
 
     def __str__(self):
         return f"""Model:
@@ -94,8 +97,7 @@ class MyVisionModel():
                 return float(current_epoch + 1) / warmup_epochs if current_epoch < warmup_epochs else 1.0
             return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
-        self.model.to(self.device)
-        self.classification_layer.to(self.device)
+        self.to(self.device)
         scheduler = get_warmup_scheduler(Optimizer, WarmUpEpochs, Epochs) if WarmUpEpochs else None
 
         for epoch in range(Epochs):
@@ -139,3 +141,44 @@ class MyVisionModel():
             avg_val_loss = val_loss / len(self.val_loader)
             val_acc = 100 * correct / total
             logging.info(f'Epoch {epoch+1}/{Epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.2f}%')
+    
+    def save_weights(self, weights_path):
+        model_path = os.path.join(weights_path, 'model.pth')
+        torch.save({
+            'state_dict': self.model.model.state_dict(),
+            'classification_layer_state_dict': self.model.classification_layer.state_dict()
+        }, model_path)
+        logging.info(f" === Weights saved to: {weights_path}")
+
+    def load_weights(self, weights_path):
+        model_path = os.path.join(weights_path, 'model.pth')
+        if os.path.exists(model_path):
+            checkpoint = torch.load(model_path, map_location=self.device)
+            self.model.load_state_dict(checkpoint['state_dict'])
+            self.classification_layer.load_state_dict(checkpoint['classification_layer_state_dict'])
+            logging.info(f"Vision model weights loaded from: {model_path}")
+        else:
+            logging.warning(f"No weights found at: {model_path}")
+            logging.info(f"Starting with pre-trained {self.model_name} model weights")
+
+    def forward(self, images) -> torch.Tensor:
+        if isinstance(images, list):
+            if len(images) > 0 and isinstance(images[0], list):
+                batch_embeddings = []
+                for views in images:
+                    sample_emb = torch.cat([
+                        torch.flatten(self.model(img.unsqueeze(0).to(self.device)), start_dim=1)
+                        for img in views
+                    ], dim=1)  
+                    batch_embeddings.append(sample_emb)
+                return torch.cat(batch_embeddings, dim=0) 
+            else:
+                sample_emb = torch.cat([
+                    torch.flatten(self.model(img.unsqueeze(0).to(self.device)), start_dim=1)
+                    for img in images
+                ], dim=1) 
+                return sample_emb  
+        elif isinstance(images, torch.Tensor):
+            return self.model(images.to(self.device))
+        else:
+            raise ValueError(f"Unsupported input type for images: {type(images)}")

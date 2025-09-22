@@ -58,7 +58,6 @@ class VisionPipeline:
             dataset=self.dataset,
             batch_size=self.config.get('batch_size', 16)
         )
-
         logging.info(f" === Model {self.config.get('model_name')} created on {device} === ")
         
     def extract_embeddings(self, phase='baseline'):
@@ -75,8 +74,7 @@ class VisionPipeline:
         else:
             self.finetune_embeddings = test_embeddings
             self.finetune_labels = test_labels
-            logging.info(f" === Post-finetune embeddings extracted: {test_embeddings.shape} === ")
-            
+            logging.info(f" === Post-finetune embeddings extracted: {test_embeddings.shape} === ") 
         return test_embeddings, test_labels
     
     def run_dimensionality_reduction(self, embeddings=None, labels=None, phase='baseline'):        
@@ -91,13 +89,13 @@ class VisionPipeline:
             embeddings=embeddings, 
             labels=labels,
             seed=self.config.get('seed', 3),
-            optimizer_trials=self.config.get('optimizer_trials', 5),
-            available_methods=self.config.get('available reducer methods', ['pca']),
+            optimizer_trials=self.config.get('reducer_optimizer_trials', 50),
+            available_methods=self.config.get('available_reducer_methods', ['pca']),
             n_jobs=self.config.get('n_jobs', -1),
             use_incremental=self.config.get('use_incremental', True)
         )
 
-        scores = reducer.compare_methods()
+        scores = reducer.reduce_all()
         best_method, best_embeddings = reducer.get_best_result()
         results = {
             'scores': scores,
@@ -111,7 +109,6 @@ class VisionPipeline:
             self.baseline_embeddings = best_embeddings
         else:
             self.finetune_embeddings = best_embeddings
-            
         logging.info(f" === Dimensionality reduction {phase} - Best method: {best_method} === ")
         return results
     
@@ -127,9 +124,8 @@ class VisionPipeline:
             embeddings=embeddings, 
             true_labels=labels, 
             seed=self.config.get('seed', 3),
-            optimizer_trials=self.config.get('optimizer_trials', 50),
-            available_methods=self.config.get('available clustering methods', ['agglomerative']),
-            use_mini_batch=self.config.get('use_mini_batch', True),
+            optimizer_trials=self.config.get('clustering_optimizer_trials', 50),
+            available_methods=self.config.get('available_clustering_methods', ['dbscan']),
             n_jobs=self.config.get('n_jobs', -1),
         )
         
@@ -145,7 +141,6 @@ class VisionPipeline:
             'clustering': clustering
         }
         self.results[f'{phase}_clustering'] = clustering_results
-
         logging.info(f" === Clustering {phase} - Best method: {best_method} === ")
         return clustering_results
     
@@ -265,12 +260,16 @@ class VisionPipeline:
         self.results['comparison'] = comparison_results
         return comparison_results
     
-    def run_full_pipeline(self, include_finetune=False):
+    def run_full_pipeline(self, include_finetune=False, weights_path=None):
         """Run the full pipeline"""
         self.run_baseline()
-        
         if include_finetune:
             self.fine_tune()
+            self.run_post_finetune()
+            self.compare_results()
+        if weights_path:
+            self.model.load_weights(weights_path)
+            self.extract_embeddings(phase='finetune')
             self.run_post_finetune()
             self.compare_results()
     
@@ -303,12 +302,7 @@ class VisionPipeline:
         with open(os.path.join(experiment_path, 'results.pkl'), 'wb') as f:
             pickle.dump(self.results, f)
         
-        if self.model is not None:
-            model_path = os.path.join(experiment_path, 'model.pth')
-            torch.save({
-                'state_dict': self.model.model.state_dict(),
-                'classification_layer_state_dict': self.model.classification_layer.state_dict()
-            }, model_path)
+        self.model.save_weights(save_dir)
         logging.info(f" === Results saved to: {experiment_path} ===")
         return experiment_path
     

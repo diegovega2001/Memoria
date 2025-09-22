@@ -59,13 +59,34 @@ class DimensionalityReducer:
         logging.info(f"Initialized with {self.embeddings.shape[0]} samples, {self.embeddings.shape[1]} features")
         logging.info(f"Using {self.n_jobs} CPU cores")        
 
+    def _get_default_params(self, method: str) -> Dict[str, Any]:
+        """Get default parameters for each method."""
+        max_components = min(50, self.embeddings.shape[1] - 1)
+        
+        defaults = {
+            'pca': {'n_components': max_components},
+            'tsne': {
+                'n_components': 2,
+                'perplexity': min(30, self.embeddings.shape[0] // 4),
+                'learning_rate': 200,
+                'max_iter': 500,
+                'early_exaggeration': 6
+            },
+            'umap': {
+                'n_components': 2,
+                'n_neighbors': min(15, self.embeddings.shape[0] // 10),
+                'min_dist': 0.1,
+                'learning_rate': 1.0,
+                'metric': 'euclidean'
+            }
+        }
+        return defaults.get(method, {})
+    
     def _get_pca_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for PCA optimization."""
         n_samples = self.embeddings.shape[0]
         n_features = self.embeddings.shape[-1]
-
         max_possible = min(n_features//2, n_samples - 1)
-        
         min_components = max(2, min(50, max_possible // 2))
         max_components = max_possible
         return {'n_components': (min_components, max_components)}
@@ -73,7 +94,6 @@ class DimensionalityReducer:
     def _get_tsne_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for t-SNE optimization."""
         n_samples = self.embeddings.shape[0]
-    
         perplexity_min = max(5, min(15, n_samples // 100))
         perplexity_max = min(50, n_samples // 3)    
         return {
@@ -87,7 +107,6 @@ class DimensionalityReducer:
     def _get_umap_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for UMAP optimization."""
         n_samples = self.embeddings.shape[0]
-        
         neighbors_min = max(5, min(15, n_samples // 100))
         neighbors_max = min(100, n_samples // 10)
         return {
@@ -109,7 +128,6 @@ class DimensionalityReducer:
             else:
                 return PCA(random_state=self.seed,
                         **params)
-        
         elif method == 'tsne':
             return TSNE(
                 random_state=self.seed, 
@@ -122,11 +140,10 @@ class DimensionalityReducer:
                 n_jobs=self.n_jobs,
                 low_memory=True,
                 **params)
-        
         else:
             raise ValueError(f"Unknown method: {method}")
     
-    def optimize_parameters(self, method: str) -> Dict[str, Any]:
+    def _optimize_parameters(self, method: str) -> Dict[str, Any]:
         """Optimize hyperparameters for a specific method using Optuna."""
         def objective(trial):
             try:
@@ -134,8 +151,7 @@ class DimensionalityReducer:
                     param_ranges = self._get_pca_params_range()
                     params = {
                         'n_components': trial.suggest_int('n_components', *param_ranges['n_components'])
-                    }
-                    
+                    }  
                 elif method == 'tsne':
                     param_ranges = self._get_tsne_params_range()
                     params = {
@@ -144,8 +160,7 @@ class DimensionalityReducer:
                         'learning_rate': trial.suggest_float('learning_rate', *param_ranges['learning_rate']),
                         'max_iter': trial.suggest_int('max_iter', *param_ranges['max_iter']),
                         'early_exaggeration': trial.suggest_float('early_exaggeration', *param_ranges['early_exaggeration'])
-                    }
-                    
+                    } 
                 elif method == 'umap':
                     param_ranges = self._get_umap_params_range()
                     params = {
@@ -155,17 +170,14 @@ class DimensionalityReducer:
                         'learning_rate': trial.suggest_float('learning_rate', *param_ranges['learning_rate']),
                         'metric': trial.suggest_categorical('metric', param_ranges['metric'])
                     }
-                
                 reducer = self._create_reducer(method, params)
                 reduced_embeddings = reducer.fit_transform(self.embeddings)
-
                 silhouette_val = silhouette_score(reduced_embeddings, self.labels)
                 trust_val = trustworthiness(self.embeddings, reduced_embeddings, n_neighbors=10)
                 combined_score = 0.7 * silhouette_val + 0.3 * trust_val
                 del reducer, reduced_embeddings
                 gc.collect()
                 return combined_score
-                
             except Exception as e:
                 logging.warning(f"Trial failed for {method}: {e}")
                 return -1.0
@@ -188,14 +200,13 @@ class DimensionalityReducer:
             )
         except KeyboardInterrupt:
             logging.info("Optimization interrupted by user")
-
         logging.info(f"Optimization completed for {method}. Best value: {study.best_value:.4f}")
         return study.best_params
     
     def reduce(self, method: str, params: Dict[str, Any] = None) -> np.ndarray:
         """Apply dimensionality reduction with given or optimized parameters."""
         if params is None:
-            params = self.optimize_parameters(method)
+            params = self._optimize_parameters(method)
             self.best_params[method] = params
             logging.info(f"Best params for {method}: {params}")
         
@@ -232,29 +243,6 @@ class DimensionalityReducer:
         self.results = results
         return results
     
-    def _get_default_params(self, method: str) -> Dict[str, Any]:
-        """Get default parameters for each method."""
-        max_components = min(50, self.embeddings.shape[1] - 1)
-        
-        defaults = {
-            'pca': {'n_components': max_components},
-            'tsne': {
-                'n_components': 2,
-                'perplexity': min(30, self.embeddings.shape[0] // 4),
-                'learning_rate': 200,
-                'max_iter': 500,
-                'early_exaggeration': 6
-            },
-            'umap': {
-                'n_components': 2,
-                'n_neighbors': min(15, self.embeddings.shape[0] // 10),
-                'min_dist': 0.1,
-                'learning_rate': 1.0,
-                'metric': 'euclidean'
-            }
-        }
-        return defaults.get(method, {})
-    
     def compare_methods(self, methods: List[str] = None) -> Dict[str, float]:
         """Compare different reduction methods using silhouette score."""
         if not self.results:
@@ -267,8 +255,7 @@ class DimensionalityReducer:
         for method, embeddings in self.results.items():
             score = silhouette_score(embeddings, self.labels)
             scores[method] = score
-            logging.info(f"{method.upper():>8}: {score:.4f}")
-                        
+            logging.info(f"{method.upper():>8}: {score:.4f}")            
         return scores
     
     def get_best_result(self) -> Tuple[str, np.ndarray]:
