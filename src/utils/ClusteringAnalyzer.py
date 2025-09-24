@@ -25,6 +25,9 @@ logging.basicConfig(level=logging.INFO)
 @jit(nopython=True)
 def fast_purity_calculation(cluster_labels, true_labels):
     """Fast purity calculation using numba."""
+    cluster_labels = cluster_labels.astype(np.int32)
+    true_labels = true_labels.astype(np.int32)
+    
     unique_clusters = np.unique(cluster_labels)
     total_samples = len(cluster_labels)
     correct_assignments = 0
@@ -57,8 +60,15 @@ class ClusteringAnalyzer:
         available_methods: list = ['dbscan', 'hdbscan', 'optics', 'agglomerative'],
         n_jobs: int = -1
     ):
-        self.embeddings = embeddings.astype(np.float32)
-        self.true_labels = true_labels.cpu().numpy().astype(np.float32)
+        if hasattr(embeddings, 'cpu'):  
+            self.embeddings = embeddings.cpu().numpy().astype(np.float32)
+        else: 
+            self.embeddings = embeddings.astype(np.float32)
+        if hasattr(true_labels, 'cpu'):  
+            self.true_labels = true_labels.cpu().numpy().astype(np.int32)
+        else:  
+            self.true_labels = true_labels.astype(np.int32)
+            
         self.seed = seed
         self.optimizer_trials = optimizer_trials
 
@@ -75,20 +85,20 @@ class ClusteringAnalyzer:
         """Get default parameters for each clustering method."""
         defaults = {
             'dbscan': {
-                'eps': 0.5,
-                'min_samples': 5
+                'eps': 1.0, 
+                'min_samples': 3
             },
             'hdbscan': {
-                'min_cluster_size': 5,
-                'min_samples': 1
+                'min_cluster_size': 3,  
+                'min_samples': 2        
             },
             'optics': {
-                'min_samples': 5,
-                'xi': 0.05,
-                'min_cluster_size': 5
+                'min_samples': 2,       
+                'xi': 0.01,            
+                'min_cluster_size': 3
             },
             'agglomerative': {
-                'distance_threshold': 1.0,
+                'distance_threshold': 0.1,  
                 'linkage': 'ward',
                 'n_clusters': None
             }
@@ -99,47 +109,54 @@ class ClusteringAnalyzer:
         """Define parameter ranges for DBSCAN optimization."""
         n_samples = self.embeddings.shape[0]
         reduced_dims = self.embeddings.shape[-1]
-        k = min(4, max(2, int(np.sqrt(n_samples) // 10)))
+        k = max(3, min(10, n_samples // 200))  
         neighbors = NearestNeighbors(n_neighbors=k, n_jobs=self.n_jobs)
         neighbors.fit(self.embeddings)
         distances, indices = neighbors.kneighbors(self.embeddings)
         k_distances = np.sort(distances[:, k-1])
         
-        if reduced_dims <= 3:
-            base_eps_min, base_eps_max = 0.1, 5.0
-        elif reduced_dims <= 10:
-            base_eps_min, base_eps_max = 0.05, 3.0
-        else:
-            base_eps_min, base_eps_max = 0.01, 2.0
+        base_eps_min = -np.inf
+        base_eps_max = np.inf
+        if reduced_dims <= 3:  
+            base_eps_min, base_eps_max = 0.05, 2.0
+        elif reduced_dims <= 10:  
+            base_eps_min, base_eps_max = 0.1, 4.0
         
-        eps_min = min(base_eps_min, np.percentile(k_distances, 5))
-        eps_max = max(base_eps_max, np.percentile(k_distances, 95))
-        min_samples_max = min(25, max(5, n_samples // 50))
+        eps_min = max(base_eps_min, np.percentile(k_distances, 50))  
+        eps_max = min(base_eps_max, np.percentile(k_distances, 90))  
+        
+        if eps_max - eps_min < 0.2:
+            eps_max = eps_min + 0.5
+    
+        min_samples_max = min(10, max(5, n_samples // 100))  
         return {
             'eps': (eps_min, eps_max),
-            'min_samples': (2, min_samples_max)
+            'min_samples': (1, min_samples_max)
         }
     
     def _get_hdbscan_params_range(self) -> Dict[str, Tuple]:
+        """HDBSCAN ranges."""
         n_samples = self.embeddings.shape[0]
+        max_cluster_size = min(15, n_samples // 50)
         return {
-            'min_cluster_size': (2, max(30, n_samples // 100)),
-            'min_samples': (1, 10)
+            'min_cluster_size': (2, max_cluster_size),  
+            'min_samples': (1, 5)
         }
 
     def _get_optics_params_range(self) -> Dict[str, Tuple]:
+        """OPTICS ranges."""
         n_samples = self.embeddings.shape[0]
         return {
-            'min_samples': (2, min(25, n_samples // 50)),
-            'xi': (0.01, 0.1),
-            'min_cluster_size': (2, max(30, n_samples // 100))
+            'min_samples': (2, 6),  
+            'xi': (0.005, 0.05),    
+            'min_cluster_size': (2, min(10, n_samples // 100))
         }
 
     def _get_agglomerative_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for Agglomerative Clustering optimization."""
         return {
-            'distance_threshold': (0.1, 5.0),  
-            'linkage': ['ward', 'complete', 'average', 'single']
+            'distance_threshold': (10.0, 25.0), 
+            'linkage': ['ward', 'complete', 'average']  
         }
 
     def _create_clusterer(self, method: str, params: Dict[str, Any]):
@@ -150,7 +167,10 @@ class ClusteringAnalyzer:
         elif method == 'optics':
           return OPTICS(n_jobs=self.n_jobs, **params)
         elif method == 'agglomerative':
-          return AgglomerativeClustering(**params)
+          agg_params = params.copy()
+          if 'distance_threshold' in agg_params and agg_params['distance_threshold'] is not None:
+              agg_params['n_clusters'] = None
+          return AgglomerativeClustering(**agg_params)
         else:
           raise ValueError(f"Unknown method: {method}")
     
@@ -179,26 +199,34 @@ class ClusteringAnalyzer:
                     }
                 elif method == 'agglomerative':
                     param_ranges = self._get_agglomerative_params_range()
+                    linkage = trial.suggest_categorical('linkage', param_ranges['linkage'])
+                    distance_threshold = trial.suggest_float(
+                        'distance_threshold', 
+                        *param_ranges['distance_threshold']
+                    )
                     params = {
-                        'distance_threshold': trial.suggest_float(
-                            'distance_threshold', 
-                            *param_ranges['distance_threshold']
-                        ),
-                        'linkage': trial.suggest_categorical('linkage', param_ranges['linkage']),
+                        'distance_threshold': distance_threshold,
+                        'linkage': linkage,
                         'n_clusters': None 
                     }
                 clusterer = self._create_clusterer(method, params)
                 cluster_labels = clusterer.fit_predict(self.embeddings)
                 
                 n_clusters = len(np.unique(cluster_labels))
+                n_samples = len(self.embeddings)
+                if n_clusters < 2 or n_clusters >= n_samples - 1:  
+                    return -1.0
                 if n_clusters < 2 or (method == 'dbscan' and n_clusters == 1):  
-                    return -1
+                    return -1.0
                 
                 silhouette = silhouette_score(self.embeddings, cluster_labels)
                 ari = adjusted_rand_score(self.true_labels, cluster_labels)
                 nmi = normalized_mutual_info_score(self.true_labels, cluster_labels)
-
-                combined_score = 0.2 * silhouette + 0.5 * ari + 0.3 * nmi
+                silhouette_norm = (silhouette + 1) / 2 
+                ari_norm = max(0, ari)  
+                nmi_norm = max(0, nmi)  
+                
+                combined_score = 0.1 * silhouette_norm + 0.7 * ari_norm + 0.2 * nmi_norm
 
                 del clusterer
                 gc.collect()
@@ -277,6 +305,7 @@ class ClusteringAnalyzer:
     def evaluate_clustering(self, cluster_labels: np.ndarray, method_name: str = "") -> Dict[str, float]:
         """Evaluate clustering quality using multiple metrics."""
         metrics = {}
+        cluster_labels = cluster_labels.astype(np.int32)
         valid_mask = cluster_labels != -1
         n_valid = np.sum(valid_mask)
 
@@ -292,35 +321,58 @@ class ClusteringAnalyzer:
                 'purity': 0.0
             }
 
-        valid_embeddings = self.embeddings[valid_mask]
+        valid_embeddings = self.embeddings[valid_mask].astype(np.float64)  
         valid_cluster_labels = cluster_labels[valid_mask]
         valid_true_labels = self.true_labels[valid_mask]
 
         n_clusters = len(np.unique(valid_cluster_labels))
         if n_clusters > 1:
-            metrics['silhouette_score'] = silhouette_score(
-                valid_embeddings, 
-                valid_cluster_labels
-            )
-            metrics['calinski_harabasz_score'] = calinski_harabasz_score(
-                valid_embeddings, 
-                valid_cluster_labels
-            )
-            metrics['davies_bouldin_score'] = davies_bouldin_score(
-                valid_embeddings, 
-                valid_cluster_labels
-            )
+            try:
+                metrics['silhouette_score'] = silhouette_score(
+                    valid_embeddings, 
+                    valid_cluster_labels
+                )
+            except Exception as e:
+                logging.warning(f"Silhouette score calculation failed for {method_name}: {e}")
+                metrics['silhouette_score'] = -1
+            try:
+                metrics['calinski_harabasz_score'] = calinski_harabasz_score(
+                    valid_embeddings, 
+                    valid_cluster_labels
+                )
+            except Exception as e:
+                logging.warning(f"Calinski Harabasz score calculation failed for {method_name}: {e}")
+                metrics['calinski_harabasz_score'] = -1
+            try:
+                metrics['davies_bouldin_score'] = davies_bouldin_score(
+                    valid_embeddings, 
+                    valid_cluster_labels
+                )
+            except Exception as e:
+                logging.warning(f"Davies Bouldin score calculation failed for {method_name}: {e}")
+                metrics['davies_bouldin_score'] = float('inf')
         else:
             metrics['silhouette_score'] = -1
             metrics['calinski_harabasz_score'] = -1
             metrics['davies_bouldin_score'] = float('inf')
-        
-        metrics['adjusted_rand_score'] = adjusted_rand_score(valid_true_labels, valid_cluster_labels)
-        metrics['normalized_mutual_info'] = normalized_mutual_info_score(valid_true_labels, valid_cluster_labels)
-        metrics['purity'] = fast_purity_calculation(cluster_labels, self.true_labels)
+        try:
+            metrics['adjusted_rand_score'] = adjusted_rand_score(valid_true_labels, valid_cluster_labels)
+        except Exception as e:
+            logging.warning(f"Adjusted rand score calculation failed for {method_name}: {e}")
+            metrics['adjusted_rand_score'] = -1
+        try:
+            metrics['normalized_mutual_info'] = normalized_mutual_info_score(valid_true_labels, valid_cluster_labels)
+        except Exception as e:
+            logging.warning(f"Normalized mutual info calculation failed for {method_name}: {e}")
+            metrics['normalized_mutual_info'] = -1   
+        try:
+            metrics['purity'] = fast_purity_calculation(cluster_labels, self.true_labels)
+        except Exception as e:
+            logging.warning(f"Purity calculation failed for {method_name}: {e}")
+            metrics['purity'] = 0.0
 
         metrics['n_clusters'] = n_clusters
-        metrics['n_noise_points'] = self.n_true_clusters - n_valid
+        metrics['n_noise_points'] = len(self.true_labels) - n_valid
         return metrics
     
     def compare_methods(self, methods: List[str] = None) -> pd.DataFrame:

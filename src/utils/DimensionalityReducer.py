@@ -60,61 +60,63 @@ class DimensionalityReducer:
         logging.info(f"Using {self.n_jobs} CPU cores")        
 
     def _get_default_params(self, method: str) -> Dict[str, Any]:
-        """Get default parameters for each method."""
-        max_components = min(50, self.embeddings.shape[1] - 1)
+        """Get default parameters optimized for clustering performance."""
+        max_components = min(100, self.embeddings.shape[1] - 1) 
         
         defaults = {
-            'pca': {'n_components': max_components},
+            'pca': {'n_components': min(50, max_components)}, 
             'tsne': {
                 'n_components': 2,
                 'perplexity': min(30, self.embeddings.shape[0] // 4),
                 'learning_rate': 200,
-                'max_iter': 500,
-                'early_exaggeration': 6
+                'max_iter': 1000,  
+                'early_exaggeration': 12  
             },
             'umap': {
-                'n_components': 2,
-                'n_neighbors': min(15, self.embeddings.shape[0] // 10),
-                'min_dist': 0.1,
+                'n_components': 20,  
+                'n_neighbors': min(30, self.embeddings.shape[0] // 20),  
+                'min_dist': 0.0,  
                 'learning_rate': 1.0,
-                'metric': 'euclidean'
+                'metric': 'cosine' 
             }
         }
         return defaults.get(method, {})
     
     def _get_pca_params_range(self) -> Dict[str, Tuple]:
-        """Define parameter ranges for PCA optimization."""
+        """Define parameter ranges for PCA optimization - higher components for clustering."""
         n_samples = self.embeddings.shape[0]
         n_features = self.embeddings.shape[-1]
-        max_possible = min(n_features//2, n_samples - 1)
-        min_components = max(2, min(50, max_possible // 2))
-        max_components = max_possible
+        max_possible = min(n_features, n_samples - 1)
+        
+        min_components = max(10, min(30, max_possible // 4))  
+        max_components = min(max_possible, max(100, n_features // 2))  
+        
         return {'n_components': (min_components, max_components)}
     
     def _get_tsne_params_range(self) -> Dict[str, Tuple]:
         """Define parameter ranges for t-SNE optimization."""
         n_samples = self.embeddings.shape[0]
-        perplexity_min = max(5, min(15, n_samples // 100))
-        perplexity_max = min(50, n_samples // 3)    
+        perplexity_min = max(5, min(15, n_samples // 150)) 
+        perplexity_max = min(100, n_samples // 3) 
         return {
             'n_components': (2, 3),
             'perplexity': (perplexity_min, perplexity_max),
-            'learning_rate': (50, 500),
-            'max_iter': (500, 1000),
-            'early_exaggeration': (10.0, 15.0)
+            'learning_rate': (100, 1000),  
+            'max_iter': (1000, 2000), 
+            'early_exaggeration': (6.0, 20.0) 
         }
     
     def _get_umap_params_range(self) -> Dict[str, Tuple]:
-        """Define parameter ranges for UMAP optimization."""
+        """Define parameter ranges for UMAP optimization - clustering focused."""
         n_samples = self.embeddings.shape[0]
-        neighbors_min = max(5, min(15, n_samples // 100))
-        neighbors_max = min(100, n_samples // 10)
+        neighbors_min = max(5, min(15, n_samples // 150))  
+        neighbors_max = min(200, n_samples // 5)  
         return {
-            'n_components': (2, 60),
+            'n_components': (2, min(100, self.embeddings.shape[1] // 2)), 
             'n_neighbors': (neighbors_min, neighbors_max),
-            'min_dist': (0.0, 0.3),
-            'learning_rate': (0.5, 2.0),
-            'metric': ['euclidean', 'cosine']
+            'min_dist': (0.0, 0.5),  
+            'learning_rate': (0.1, 3.0),  
+            'metric': ['euclidean', 'cosine', 'manhattan']  
         }
     
     def _create_reducer(self, method: str, params: Dict[str, Any]):
@@ -133,7 +135,6 @@ class DimensionalityReducer:
                 random_state=self.seed, 
                 n_jobs=self.n_jobs,
                 **params)
-        
         elif method == 'umap':
             return umap.UMAP(
                 random_state=self.seed,
@@ -171,10 +172,12 @@ class DimensionalityReducer:
                         'metric': trial.suggest_categorical('metric', param_ranges['metric'])
                     }
                 reducer = self._create_reducer(method, params)
-                reduced_embeddings = reducer.fit_transform(self.embeddings)
+                reduced_embeddings = reducer.fit_transform(self.embeddings) 
                 silhouette_val = silhouette_score(reduced_embeddings, self.labels)
                 trust_val = trustworthiness(self.embeddings, reduced_embeddings, n_neighbors=10)
-                combined_score = 0.7 * silhouette_val + 0.3 * trust_val
+                silhouette_norm = (silhouette_val + 1) / 2
+                combined_score = 0.6 * silhouette_norm + 0.4 * trust_val
+                
                 del reducer, reduced_embeddings
                 gc.collect()
                 return combined_score

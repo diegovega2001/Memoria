@@ -145,7 +145,7 @@ class MyVisionModel(torch.nn.Module):
     def save_weights(self, weights_path):
         model_path = os.path.join(weights_path, 'model.pth')
         torch.save({
-            'state_dict': self.model.model.state_dict(),
+            'state_dict': self.model.state_dict(),
             'classification_layer_state_dict': self.model.classification_layer.state_dict()
         }, model_path)
         logging.info(f" === Weights saved to: {weights_path}")
