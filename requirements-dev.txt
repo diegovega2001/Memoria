@@ -1,0 +1,40 @@
+# ==============================================================================
+# REQUIREMENTS-DEV.TXT - Dependencias Esenciales para Desarrollo
+# Proyecto CompCars - Python 3.12.6
+# ==============================================================================
+
+# ---------------------- DEEP LEARNING CORE ----------------------
+torch==2.2.2
+torchvision==0.17.2
+transformers==4.56.1
+openai-clip==1.0.1
+
+# ---------------------- SCIENTIFIC COMPUTING ----------------------
+numpy==1.26.4
+pandas==2.3.1
+scikit-learn==1.7.1
+pillow==11.3.0
+
+# ---------------------- CLUSTERING & ANALYSIS ----------------------
+hdbscan==0.8.40
+umap-learn==0.5.9.post2
+
+# ---------------------- VISUALIZATION ----------------------
+matplotlib==3.10.5
+seaborn==0.13.2
+plotly==6.2.0
+
+# ---------------------- HYPERPARAMETER OPTIMIZATION ----------------------
+optuna==4.5.0
+
+# ---------------------- JUPYTER & DEVELOPMENT ----------------------
+jupyter
+ipywidgets==8.1.7
+
+# ---------------------- UTILITIES ----------------------
+tqdm==4.67.1
+PyYAML==6.0.2
+requests==2.32.5
+
+# ---------------------- DEVELOPMENT TOOLS ----------------------
+colorlog==6.9.0

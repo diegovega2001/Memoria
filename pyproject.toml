@@ -1,0 +1,201 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "compcars-analysis"
+version = "0.1.0"
+description = "Análisis de vehículos con deep learning usando dataset CompCars"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    {name = "Diego Vega", email = "diegovega2000@live.com"}
+]
+maintainers = [
+    {name = "Diego Vega", email = "diegovega2000@live.com"}
+]
+keywords = [
+    "deep-learning",
+    "computer-vision", 
+    "pytorch",
+    "vehicle-classification",
+    "compcars",
+    "clustering",
+    "embeddings",
+    "fine-tuning"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition"
+]
+
+dependencies = [
+    # Deep Learning Core
+    "torch>=2.2.0",
+    "torchvision>=0.17.0",
+    "transformers>=4.50.0",
+    
+    # Scientific Computing
+    "numpy>=1.26.0",
+    "pandas>=2.0.0",
+    "scikit-learn>=1.7.0",
+    
+    # Computer Vision
+    "pillow>=10.0.0",
+    "opencv-python>=4.8.0",
+    
+    # Clustering & Analysis
+    "hdbscan>=0.8.0",
+    "umap-learn>=0.5.0",
+    
+    # Visualization
+    "matplotlib>=3.8.0",
+    "seaborn>=0.12.0",
+    "plotly>=5.17.0",
+    
+    # Hyperparameter Optimization
+    "optuna>=3.4.0",
+    
+    # Utilities
+    "tqdm>=4.65.0",
+    "PyYAML>=6.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-xdist>=3.3.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.5.0",
+]
+jupyter = [
+    "jupyter>=1.0.0",
+    "ipywidgets>=8.0.0",
+    "jupyterlab>=4.0.0",
+]
+all = [
+    "compcars-analysis[dev,jupyter]"
+]
+
+[project.urls]
+Homepage = "https://github.com/diegovega2001/Memoria"
+Documentation = "https://github.com/diegovega2001/Memoria/blob/main/README.md"
+Repository = "https://github.com/diegovega2001/Memoria.git"
+"Bug Tracker" = "https://github.com/diegovega2001/Memoria/issues"
+
+[project.scripts]
+compcars-train = "src.pipeline.FineTuningPipeline:main"
+compcars-analyze = "src.pipeline.EmbeddingsPipeline:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+exclude = ["tests*", "experiments*", "results*"]
+
+[tool.setuptools.package-data]
+"src.config" = ["*.yaml", "*.json"]
+
+# ---------------------- HERRAMIENTAS DE DESARROLLO ----------------------
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+known_first_party = ["src"]
+known_third_party = ["torch", "torchvision", "transformers", "numpy", "pandas", "sklearn"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "torch.*",
+    "torchvision.*", 
+    "transformers.*",
+    "sklearn.*",
+    "hdbscan.*",
+    "umap.*",
+    "optuna.*",
+    "plotly.*"
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short", 
+    "--strict-markers",
+    "--disable-warnings",
+    "--color=yes"
+]
+markers = [
+    "slow: marca tests como lentos",
+    "integration: tests de integración", 
+    "unit: tests unitarios",
+    "gpu: tests que requieren GPU"
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/.venv/*"
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:"
+]
