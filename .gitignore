@@ -12,11 +12,11 @@ __pycache__/
 # Dataset 
 dataset/
 
-# Experiments
-experiments/
-
 # Results
 results/
 
 # Testing
 testing/
+
+# Experiments
+experiments/

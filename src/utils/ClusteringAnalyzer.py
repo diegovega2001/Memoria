@@ -131,159 +131,80 @@ class ClusteringAnalyzer:
         
         logging.info(f"Inicializado clustering con {len(self.embeddings)} muestras, {self.n_true_clusters} clusters verdaderos")
     
-
-    
-    def _get_dbscan_params_range(self) -> Dict[str, Tuple[float, int]]:
+    def _get_dbscan_params_range(self) -> Dict[str, Tuple]:
         """
         Define rangos de parámetros para optimización de DBSCAN.
         
         Utiliza análisis k-distance inteligente para determinar rangos óptimos
         de epsilon basados en la distribución de distancias del dataset.
         """
-        n_samples, reduced_dims = self.embeddings.shape
-        
-        # Análisis k-distance optimizado
-        k = max(4, min(10, n_samples // 120))  # Más adaptativos
-        neighbors = NearestNeighbors(
-            n_neighbors=k, 
-            n_jobs=self.n_jobs, 
-            algorithm='ball_tree'
-        )
+        n_samples = self.embeddings.shape[0]
+        reduced_dims = self.embeddings.shape[-1]
+        k = max(3, min(10, n_samples // 200))  
+        neighbors = NearestNeighbors(n_neighbors=k, n_jobs=self.n_jobs)
         neighbors.fit(self.embeddings)
-        distances, _ = neighbors.kneighbors(self.embeddings)
+        distances, indices = neighbors.kneighbors(self.embeddings)
         k_distances = np.sort(distances[:, k-1])
         
-        # Rangos adaptativos según dimensionalidad
-        if reduced_dims <= 3:
-            eps_min = max(0.05, np.percentile(k_distances, 20))
-            eps_max = min(4.0, np.percentile(k_distances, 88))
-        elif reduced_dims <= 25:
-            eps_min = max(0.3, np.percentile(k_distances, 30))
-            eps_max = min(10.0, np.percentile(k_distances, 85))
-        else:
-            eps_min = max(0.8, np.percentile(k_distances, 35))
-            eps_max = min(20.0, np.percentile(k_distances, 80))
+        base_eps_min = -np.inf
+        base_eps_max = np.inf
+        if reduced_dims <= 3:  
+            base_eps_min, base_eps_max = 0.05, 2.0
+        elif reduced_dims <= 10:  
+            base_eps_min, base_eps_max = 0.1, 4.0
         
-        # Garantizar rango mínimo viable
-        if eps_max - eps_min < 0.3:
-            eps_max = eps_min + 1.5
+        eps_min = max(base_eps_min, np.percentile(k_distances, 50))  
+        eps_max = min(base_eps_max, np.percentile(k_distances, 90))  
         
-        # min_samples optimizado para embeddings de visión
-        min_samples_max = min(20, max(8, n_samples // 60))
-        
+        if eps_max - eps_min < 0.2:
+            eps_max = eps_min + 0.5
+    
+        min_samples_max = min(10, max(5, n_samples // 100))  
         return {
             'eps': (eps_min, eps_max),
-            'min_samples': (4, min_samples_max)  # Mínimo 4 para mayor robustez
+            'min_samples': (1, min_samples_max)
         }
     
-    def _get_hdbscan_params_range(self) -> Dict[str, Tuple[int, float]]:
+    def _get_hdbscan_params_range(self) -> Dict[str, Tuple]:
         """
         Define rangos de parámetros para optimización de HDBSCAN.
         
         Calcula rangos adaptativos basados en el tamaño del dataset y
         características de los embeddings para maximizar calidad del clustering.
         """
-        n_samples, reduced_dims = self.embeddings.shape
-        
-        # min_cluster_size optimizado para embeddings de visión
-        min_cluster_min = max(6, n_samples // 180)  # Mínimo 0.55% datos
-        min_cluster_max = min(150, n_samples // 6)   # Máximo 16.7%
-        
-        # min_samples como proporción inteligente de min_cluster_size
-        min_samples_min = max(2, min_cluster_min // 3)
-        min_samples_max = min(75, min_cluster_max // 2)
-        
-        # cluster_selection_epsilon para control de granularidad
-        noise_threshold = self._estimate_noise_threshold()
-        if reduced_dims <= 15:
-            epsilon_min = 0.0
-            epsilon_max = min(0.8, noise_threshold * 0.7)
-        else:
-            epsilon_min = 0.0
-            epsilon_max = min(1.5, noise_threshold * 1.1)
-        
+        n_samples = self.embeddings.shape[0]
+        max_cluster_size = min(15, n_samples // 50)
         return {
-            'min_cluster_size': (min_cluster_min, min_cluster_max),
-            'min_samples': (min_samples_min, min_samples_max),
-            'cluster_selection_epsilon': (epsilon_min, epsilon_max)
+            'min_cluster_size': (2, max_cluster_size),  
+            'min_samples': (1, 5)
         }
 
-    def _get_optics_params_range(self) -> Dict[str, Tuple[int, float]]:
+    def _get_optics_params_range(self) -> Dict[str, Tuple]:
         """
         Define rangos de parámetros para optimización de OPTICS.
         
         Configura rangos adaptativos optimizados para análisis de embeddings
         de visión computacional con enfoque en calidad de clustering.
         """
-        n_samples, reduced_dims = self.embeddings.shape
-        
-        # min_samples adaptativo según dimensionalidad y tamaño
-        if reduced_dims <= 10:
-            min_samples_min, min_samples_max = 4, 12
-        elif reduced_dims <= 50:
-            min_samples_min, min_samples_max = 6, 18
-        else:
-            min_samples_min, min_samples_max = 8, 25
-        
-        # xi optimizado para separación de clusters en embeddings
-        if n_samples < 500:
-            xi_min, xi_max = 0.02, 0.12  # Más granular para datasets pequeños
-        elif n_samples < 2000:
-            xi_min, xi_max = 0.015, 0.09  # Balance medio
-        else:
-            xi_min, xi_max = 0.01, 0.07   # Más conservador para datasets grandes
-        
-        # min_cluster_size proporcional al dataset
-        min_cluster_max = min(30, max(10, n_samples // 45))
-        
+        n_samples = self.embeddings.shape[0]
         return {
-            'min_samples': (min_samples_min, min_samples_max),
-            'xi': (xi_min, xi_max),
-            'min_cluster_size': (5, min_cluster_max)  # Mínimo 5 para estabilidad
+            'min_samples': (2, 6),  
+            'xi': (0.005, 0.05),    
+            'min_cluster_size': (2, min(10, n_samples // 100))
         }
 
-    def _get_agglomerative_params_range(self) -> Dict[str, Union[Tuple[float, float], List[str]]]:
+    def _get_agglomerative_params_range(self) -> Dict[str, Tuple]:
         """
         Define rangos de parámetros para Clustering Aglomerativo.
         
         Utiliza análisis estadístico de distancias para calcular thresholds
         óptimos adaptados a las características del espacio de embeddings.
         """
-        n_samples, reduced_dims = self.embeddings.shape
-        
-        # Muestreo inteligente para análisis de distancias
-        sample_size = min(800, max(100, n_samples // 5))
-        sample_idx = np.random.RandomState(self.seed).choice(
-            n_samples, sample_size, replace=False
-        )
-        sample_data = self.embeddings[sample_idx]
-        
-        # Análisis de distribución de distancias
-        from sklearn.metrics.pairwise import euclidean_distances
-        distances = euclidean_distances(sample_data[:150])
-        valid_distances = distances[distances > 0]
-        
-        # Cálculo de thresholds adaptativos
-        percentile_25 = np.percentile(valid_distances, 25)
-        percentile_75 = np.percentile(valid_distances, 75)
-        mean_dist = np.mean(valid_distances)
-        
-        # Rangos optimizados según dimensionalidad
-        if reduced_dims <= 10:
-            threshold_min = max(2.0, percentile_25 * 0.8)
-            threshold_max = min(25.0, percentile_75 * 2.2)
-        elif reduced_dims <= 50:
-            threshold_min = max(4.0, mean_dist * 0.6)
-            threshold_max = min(40.0, mean_dist * 2.8)
-        else:
-            threshold_min = max(6.0, mean_dist * 0.7)
-            threshold_max = min(60.0, mean_dist * 3.5)
-        
         return {
-            'distance_threshold': (threshold_min, threshold_max),
-            'linkage': ['ward', 'complete', 'average']  # Incluir ward para embeddings normalizados
+            'distance_threshold': (10.0, 25.0), 
+            'linkage': ['ward', 'complete', 'average']  
         }
-
+    
     def _create_clusterer(self, method: str, params: Dict[str, Any]):
         """
         Crea instancia del algoritmo de clustering especificado.
