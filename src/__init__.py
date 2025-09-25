@@ -27,14 +27,15 @@ from __future__ import annotations
 from . import config
 from . import data
 from . import models
-from . import pipeline
 from . import utils
+from . import pipeline
 
-# Importar las clases más utilizadas para acceso directo
-from .data import CarDataset, DataFrameMaker, create_car_dataset
-from .models import MultiViewVisionModel, create_vision_model
-from .pipeline import FineTuningPipeline, EmbeddingsPipeline
+# Importar todo lo utilizable desde el acceso directo
 from .config import TransformConfig, create_standard_transform
+from .data import DataFrameMaker, create_compcars_dataset, CarDataset, create_car_dataset
+from .models import MultiViewVisionModel, create_vision_model
+from .utils import DimensionalityReducer, ClusteringAnalyzer, ClusterVisualizer
+from .pipeline import FineTuningPipeline, create_embeddings_pipeline, EmbeddingsPipeline, create_finetuning_pipeline
 
 # Definir qué se exporta cuando se hace "from src import *"
 __all__ = [
@@ -42,19 +43,25 @@ __all__ = [
     'config',
     'data', 
     'models',
-    'pipeline',
     'utils',
+    'pipeline',
     # Main classes (shortcuts)
-    'CarDataset',
+    'TransformConfig',
     'DataFrameMaker',
+    'CarDataset',
     'MultiViewVisionModel',
+    'DimensionalityReducer',
+    'ClusteringAnalyzer',
+    'ClusterVisualizer',
     'FineTuningPipeline',
     'EmbeddingsPipeline',
-    'TransformConfig',
     # Factory functions
+    'create_standard_transform',
+    'create_compcars_dataset',
     'create_car_dataset',
     'create_vision_model',
-    'create_standard_transform',
+    'create_embeddings_pipeline',
+    'create_finetuning_pipeline'
 ]
 
 # Información del proyecto
