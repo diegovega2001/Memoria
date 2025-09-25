@@ -1,22 +1,131 @@
-# Cache
+# ==============================================================================
+# .GITIGNORE - Proyecto CompCars
+# ==============================================================================
+
+# ---------------------- PYTHON ----------------------
+# Byte-compiled / optimized / DLL files
 __pycache__/
+*.py[cod]
+*$py.class
 *.pyc
 *.pyo
 *.pyd
 *.so
 *.egg-info/
 
-# Jupyter checkpoints
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
 .ipynb_checkpoints/
 
-# Dataset 
-dataset/
+# Testing / Coverage
+htmlcov/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+*.cover
 
-# Results
+# ---------------------- MACOS ----------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ---------------------- ML/AI ESPECÍFICO ----------------------
+# PyTorch models
+*.pth
+*.pt
+
+# Large datasets (mantener estructura pero no archivos)
+dataset/image/
+dataset/label/
+dataset/misc/
+dataset/part/
+dataset/train_test_split/
+
+# Mantener solo el CSV principal
+!dataset.csv
+
+# Imágenes
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+*.webp
+
+# Resultados de experimentos
 results/
+experiments/
+logs/
+outputs/
+runs/
+wandb/
+mlruns/
 
-# Testing
+# Embeddings y features
+*.npy
+*.npz
+*.pkl
+*.pickle
+
+# Visualizaciones
+plots/
+figures/
+*.pdf
+*.svg
+
+# ---------------------- IDE ----------------------
+# VSCode
+.vscode/
+!.vscode/settings.json
+
+# PyCharm
+.idea/
+
+# ---------------------- TESTING ----------------------
 testing/
 
-# Experiments
-experiments/
+# ---------------------- OTROS ----------------------
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.log
+
+# Config files sensibles
+config.yaml
+secrets.json
+.env.local
+
+# Backup files
+*.bak
+*.backup
