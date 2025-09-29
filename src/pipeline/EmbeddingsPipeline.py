@@ -25,7 +25,6 @@ from src.utils.JsonUtils import safe_json_dump
 
 from src.config.TransformConfig import create_standard_transform
 from src.data.MyDataset import create_car_dataset
-from src.models.MyVisionModel import create_vision_model
 from src.utils.ClusteringAnalyzer import ClusteringAnalyzer
 from src.utils.ClusterVisualizer import ClusterVisualizer
 from src.utils.DimensionalityReducer import DimensionalityReducer
@@ -89,8 +88,7 @@ class EmbeddingsPipeline:
         self.experiment_name = experiment_name or f"embeddings_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         # Componentes del pipeline
-        self.dataset = None
-        self.model = None
+        self.dataset_dict = None
         self.baseline_embeddings = None
         self.baseline_labels = None
         self.finetuned_embeddings = None
@@ -119,12 +117,10 @@ class EmbeddingsPipeline:
         )
         
         # Crear dataset solo para obtener etiquetas y estructura
-        self.dataset = create_car_dataset(
+        self.dataset_dict = create_car_dataset(
             df=self.df,
             views=self.config.get('views', ['front']),
-            train_images=self.config.get('train_images', 50),
-            val_ratio=self.config.get('val_ratio', 0.2),
-            test_ratio=self.config.get('test_ratio', 0.2),
+            min_images_for_abundant_class=self.config.get('min_images_for_abundant_class', 6),
             seed=self.config.get('seed', 3),
             transform=transform,
             augment=False,  # Sin augmentación para análisis
@@ -132,19 +128,28 @@ class EmbeddingsPipeline:
             description_include=''
         )
         
-        # Extraer etiquetas verdaderas
-        self.baseline_labels = torch.tensor([
-            sample["labels"].item() for sample in self.dataset.test
-        ])
+
+        # Extraer etiquetas verdaderas sin cargar imágenes
+        self.dataset_dict['dataset'].set_split('test')
+        
+        # Obtener etiquetas directamente de la estructura de datos sin cargar imágenes
+        labels = []
+        for sample_tuple in self.dataset_dict['dataset'].test_samples:
+            model_year_tuple = sample_tuple[0]  # (model, year)
+            label_str = f"{model_year_tuple[0]}_{model_year_tuple[1]}"
+            label = self.dataset_dict['dataset'].label_encoder.transform([label_str])[0]
+            labels.append(label)
+        
+        self.baseline_labels = torch.tensor(labels)
         
         # Guardar información
         self.results['dataset_info'] = {
-            'num_models': self.dataset.num_models,
-            'test_samples': len(self.dataset.test),
-            'views': self.dataset.views
+            'num_models': self.dataset_dict['dataset'].num_models,
+            'test_samples': len(self.dataset_dict['dataset'].test_samples),
+            'views': self.dataset_dict['dataset'].views
         }
         
-        logging.info(f"Dataset creado - Test samples: {len(self.dataset.test)}")
+        logging.info(f"Dataset creado - Test samples: {len(self.dataset_dict['dataset'].test_samples)}")
         logging.info(f"Etiquetas extraídas: {len(self.baseline_labels)} muestras")
     
     def load_embeddings_from_files(
@@ -272,8 +277,6 @@ class EmbeddingsPipeline:
         logging.info("Análisis baseline completado!")
         return baseline_results
     
-
-    
     def analyze_finetuned_embeddings(self) -> Dict[str, Any]:
         """Analiza embeddings del modelo fine-tuneado ya cargados."""
         if self.finetuned_embeddings is None:
@@ -372,8 +375,8 @@ class EmbeddingsPipeline:
                 embeddings=best_embeddings,
                 cluster_labels=best_cluster_labels,
                 true_labels=labels,
-                test_dataset=self.dataset.test,
-                label_encoder=self.dataset.label_encoder,
+                test_dataset=self.dataset_dict['dataset'].test_samples,
+                label_encoder=self.dataset_dict['dataset'].label_encoder,
                 seed=self.config.get('seed', 3)
             )
             
@@ -621,8 +624,7 @@ class EmbeddingsPipeline:
         return (
             f"EmbeddingsPipeline("
             f"experiment={self.experiment_name}, "
-            f"dataset={'✓' if self.dataset else '✗'}, "
-            f"model={'✓' if self.model else '✗'}, "
+            f"dataset={'✓' if self.dataset_dict else '✗'}, "
             f"baseline={'✓' if self.baseline_embeddings is not None else '✗'}, "
             f"finetuned={'✓' if self.finetuned_embeddings is not None else '✗'})"
         )

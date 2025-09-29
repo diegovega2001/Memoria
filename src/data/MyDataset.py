@@ -1,13 +1,14 @@
 """
-Módulo de dataset personalizado para clasificación de vehículos multi-vista.
+Módulo de dataset personalizado para clasificación de vehículos multi-vista con estrategia adaptativa.
 
 Este módulo proporciona clases para manejar datasets de vehículos con múltiples
-vistas, incluyendo funcionalidades de división train/val/test, augmentación
-y generación de descripciones textuales.
+vistas, incluyendo funcionalidades de división train/val/test adaptativa según
+distribución long-tail, augmentación y generación de descripciones textuales.
 """
 
 from __future__ import annotations
 
+import copy
 import logging
 import random
 import warnings
@@ -20,7 +21,7 @@ import torch
 import torchvision.transforms.functional as F
 from PIL import Image
 from sklearn.preprocessing import LabelEncoder
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, BatchSampler, DataLoader
 
 # Configuración de warnings y logging
 warnings.filterwarnings('ignore')
@@ -32,15 +33,23 @@ logging.basicConfig(
 # Constantes del dataset
 DEFAULT_VIEWS = ['front', 'rear']
 DEFAULT_SEED = 3
+DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS = 6
+DEFAULT_P = 8  # Número de clases por batch para contrastive learning
+DEFAULT_K = 4  # Número de muestras por clase en cada batch
 MODEL_TYPES = {'vision', 'textual', 'both'}
 DESCRIPTION_OPTIONS = {'', 'released_year', 'type', 'all'}
 UNKNOWN_VALUES = {'unknown', 'Unknown', '', None}
 
+# Configuración fija para muestreo adaptativo
+ADAPTIVE_RATIOS = {
+    'abundant': {'train': 0.8, 'val': 0.1, 'test': 0.1},
+    'few_shot': {'train': 0.7, 'val': 0.15, 'test': 0.15},
+    'single_shot': {'train': 0.0, 'val': 0.0, 'test': 1.0}  
+}
+
 # Mensajes de error
 ERROR_INVALID_MODEL_TYPE = "model_type debe ser uno de: {}"
 ERROR_INVALID_DESCRIPTION = "description_include debe ser uno de: {}"
-ERROR_INVALID_RATIOS = "La suma de val_ratio y test_ratio no puede ser mayor a 1.0"
-ERROR_INSUFFICIENT_IMAGES = "No hay suficientes imágenes para el modelo {}: {}"
 
 
 class CarDatasetError(Exception):
@@ -50,73 +59,58 @@ class CarDatasetError(Exception):
 
 class CarDataset(Dataset):
     """
-    Dataset personalizado para clasificación de vehículos multi-vista.
+    Dataset personalizado para clasificación de vehículos multi-vista con estrategia adaptativa.
 
     Esta clase maneja datasets de vehículos con múltiples puntos de vista,
-    proporcionando funcionalidades de división automática, augmentación
-    y generación de descripciones textuales para modelos multimodales.
+    proporcionando funcionalidades de división adaptativa según distribución long-tail,
+    augmentación y generación de descripciones textuales para modelos multimodales.
 
     Attributes:
         df: DataFrame con los datos del dataset.
         views: Lista de vistas/viewpoints a incluir.
         num_views: Número de vistas configuradas.
-        train_images: Número de imágenes de entrenamiento por modelo por vista.
-        val_ratio: Proporción de imágenes para validación.
-        test_ratio: Proporción de imágenes para prueba.
+        min_images_for_abundant_class: Umbral para clasificar clases abundantes.
         seed: Semilla para reproducibilidad.
         transform: Transformaciones a aplicar a las imágenes.
         augment: Si aplicar augmentación de datos.
         model_type: Tipo de modelo ('vision', 'textual', 'both').
         description_include: Información adicional para descripciones.
-        models: Lista de modelos válidos en el dataset.
-        label_encoder: Encoder para las etiquetas de modelos.
-        train: Dataset de entrenamiento.
-        val: Dataset de validación.
-        test: Dataset de prueba.
-
-    Example:
-        >>> df = pd.read_csv('cars_dataset.csv')
-        >>> dataset = CarDataset(
-        ...     df=df,
-        ...     views=['front', 'rear'],
-        ...     train_images=50,
-        ...     val_ratio=0.2,
-        ...     test_ratio=0.2
-        ... )
-        >>> train_loader = DataLoader(dataset.train, batch_size=32)
-
-    Raises:
-        CarDatasetError: Para errores específicos del dataset.
-        ValueError: Para parámetros inválidos.
+        model_year_combinations: Lista de tuplas (modelo, año) válidas.
+        abundant_models: Modelos con muchas imágenes.
+        few_shot_models: Modelos con pocas imágenes.
+        single_shot_models: Modelos con muy pocas imágenes.
+        label_encoder: Encoder para las etiquetas de modelo-año.
+        train_samples: Muestras de entrenamiento.
+        val_samples: Muestras de validación.
+        test_samples: Muestras de prueba.
+        current_split: Split actual ('train', 'val', 'test').
     """
 
     def __init__(
         self,
         df: pd.DataFrame,
         views: List[str] = None,
-        train_images: int = 50,
-        val_ratio: float = 0.2,
-        test_ratio: float = 0.2,
+        min_images_for_abundant_class: int = DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS,
         seed: int = DEFAULT_SEED,
         transform: Optional[Any] = None,
         augment: bool = False,
         model_type: str = 'vision',
-        description_include: str = ''
+        description_include: str = '',
+        verbose: bool = True
     ) -> None:
         """
-        Inicializa el dataset de vehículos.
+        Inicializa el dataset de vehículos con estrategia adaptativa.
 
         Args:
-            df: DataFrame con columnas requeridas: 'model', 'viewpoint', 'image_path'.
+            df: DataFrame con columnas requeridas: 'model', 'released_year', 'viewpoint', 'image_path'.
             views: Lista de viewpoints a incluir. Si None, usa DEFAULT_VIEWS.
-            train_images: Número mínimo de imágenes de entrenamiento por modelo por vista.
-            val_ratio: Proporción de datos para validación (0.0-1.0).
-            test_ratio: Proporción de datos para prueba (0.0-1.0).
+            min_images_for_abundant_class: Umbral para clasificar clases como abundantes.
             seed: Semilla para reproducibilidad aleatoria.
             transform: Transformaciones de torchvision para las imágenes.
             augment: Si aplicar augmentación horizontal flip aleatoria.
             model_type: Tipo de salida ('vision', 'textual', 'both').
             description_include: Información adicional en descripciones.
+            verbose: Si mostrar logs detallados durante la inicialización.
 
         Raises:
             CarDatasetError: Si hay errores de configuración o datos.
@@ -124,53 +118,57 @@ class CarDataset(Dataset):
         """
         # Validación de parámetros
         self._validate_parameters(
-            df, views, train_images, val_ratio, test_ratio, model_type, description_include
+            df, views, min_images_for_abundant_class, model_type, description_include
         )
 
         # Configuración básica
         self.df = df.copy()
         self.views = views if views is not None else DEFAULT_VIEWS.copy()
         self.num_views = len(self.views)
-        self.train_images = train_images
-        self.val_ratio = val_ratio
-        self.test_ratio = test_ratio
+        self.min_images_for_abundant_class = min_images_for_abundant_class
         self.seed = seed
         self.transform = transform
         self.augment = augment
         self.model_type = model_type
         self.description_include = description_include
+        self.verbose = verbose
+        self.current_split = 'train'  # Por defecto
 
         # Configurar random seed
         random.seed(self.seed)
         np.random.seed(self.seed)
 
-        logging.info(f"Inicializando CarDataset con {len(self.df)} registros")
-        logging.info(f"Vistas configuradas: {self.views}")
+        if self.verbose:
+            logging.info(f"Inicializando CarDataset con {len(self.df)} registros")
+            logging.info(f"Vistas configuradas: {self.views}")
 
-        # Inicialización de componentes
-        self.models = self._initialize_valid_models()
-        self.num_models = len(self.models)
+        # Inicialización de componentes con estrategia adaptativa
+        self._initialize_model_year_combinations()
+        self.num_models = len(self.model_year_combinations)
         self.label_encoder = self._initialize_label_encoder()
         self.df = self._filter_dataframe()
 
-        # Creación de splits
-        self.train, self.val, self.test = self._create_data_splits()
+        # Creación de splits adaptativos
+        self._create_adaptive_data_splits()
 
-        logging.info(f"Dataset inicializado: {self.num_models} modelos válidos")
+        if self.verbose:
+            logging.info(f"Dataset inicializado: {self.num_models} combinaciones modelo-año válidas")
+            logging.info(f"  - Abundantes: {len(self.abundant_models)}")  
+            logging.info(f"  - Few-shot: {len(self.few_shot_models)}")
+            logging.info(f"  - Single-shot: {len(self.single_shot_models)}")
+            logging.info(f"Samples - Train: {len(self.train_samples)}, Val: {len(self.val_samples)}, Test: {len(self.test_samples)}")
 
     def _validate_parameters(
         self,
         df: pd.DataFrame,
         views: Optional[List[str]],
-        train_images: int,
-        val_ratio: float,
-        test_ratio: float,
+        min_images_for_abundant_class: int,
         model_type: str,
         description_include: str
     ) -> None:
         """Valida los parámetros de entrada."""
         # Validar DataFrame
-        required_columns = {'model', 'viewpoint', 'image_path'}
+        required_columns = {'model', 'released_year', 'viewpoint', 'image_path'}
         if not required_columns.issubset(df.columns):
             missing = required_columns - set(df.columns)
             raise CarDatasetError(f"Columnas faltantes en DataFrame: {missing}")
@@ -179,17 +177,8 @@ class CarDataset(Dataset):
             raise CarDatasetError("El DataFrame no puede estar vacío")
 
         # Validar parámetros numéricos
-        if train_images <= 0:
-            raise ValueError("train_images debe ser mayor que 0")
-
-        if not (0.0 <= val_ratio <= 1.0):
-            raise ValueError("val_ratio debe estar entre 0.0 y 1.0")
-
-        if not (0.0 <= test_ratio <= 1.0):
-            raise ValueError("test_ratio debe estar entre 0.0 y 1.0")
-
-        if val_ratio + test_ratio > 1.0:
-            raise ValueError(ERROR_INVALID_RATIOS)
+        if min_images_for_abundant_class <= 0:
+            raise ValueError("min_images_for_abundant_class debe ser mayor que 0")
 
         # Validar opciones categóricas
         if model_type not in MODEL_TYPES:
@@ -211,73 +200,76 @@ class CarDataset(Dataset):
                     f"Disponibles: {available_views}"
                 )
 
-    def _initialize_valid_models(self) -> List[str]:
-        """
-        Identifica modelos que tienen suficientes imágenes en todas las vistas.
+    def _initialize_model_year_combinations(self) -> None:
+        """Identifica combinaciones modelo-año válidas con estrategia adaptativa."""
+        if self.verbose:
+            logging.info("Identificando combinaciones modelo-año válidas...")
 
-        Returns:
-            Lista de modelos válidos.
-
-        Raises:
-            CarDatasetError: Si no hay modelos válidos.
-        """
-        logging.info("Identificando modelos válidos...")
-
-        # Contar imágenes por modelo y vista
-        counts = (
-            self.df.groupby(["model", "viewpoint"])
-            .size()
-            .unstack(fill_value=0)
-        )
-
-        # Filtrar modelos con suficientes imágenes en todas las vistas
-        valid_models = counts[
-            (counts[self.views] >= self.train_images).all(axis=1)
-        ].index.tolist()
-
-        if not valid_models:
+        # Contar imágenes por tupla modelo, año y vista
+        counts = self.df.groupby(["model", "released_year", "viewpoint"]).size().unstack(fill_value=0)
+        available_views = [v for v in self.views if v in counts.columns]
+        
+        if not available_views:
+            raise CarDatasetError(f"Ninguna de las vistas especificadas existe en el dataset: {self.views}")
+        
+        # Total de imágenes por combinación modelo-año
+        total_counts = counts[available_views].sum(axis=1)
+        
+        # Clasificar por abundancia
+        abundant_candidates = total_counts[total_counts >= self.min_images_for_abundant_class].index.tolist()
+        few_shot_candidates = total_counts[(total_counts >= 2) & (total_counts < self.min_images_for_abundant_class)].index.tolist()
+        single_shot_candidates = total_counts[total_counts == 1].index.tolist()
+        
+        # Validar que tengan imágenes en las vistas requeridas
+        self.abundant_models = []
+        self.few_shot_models = []
+        self.single_shot_models = []
+        
+        for model_year_tuple in abundant_candidates:
+            if (counts.loc[model_year_tuple][self.views] >= 1).all():
+                self.abundant_models.append(model_year_tuple)
+        
+        for model_year_tuple in few_shot_candidates:
+            if (counts.loc[model_year_tuple][self.views] >= 1).all():
+                self.few_shot_models.append(model_year_tuple)
+        
+        for model_year_tuple in single_shot_candidates:
+            if (counts.loc[model_year_tuple][self.views] >= 1).any():
+                self.single_shot_models.append(model_year_tuple)
+        
+        self.model_year_combinations = self.abundant_models + self.few_shot_models + self.single_shot_models
+        
+        if not self.model_year_combinations:
             raise CarDatasetError(
-                f"No se encontraron modelos con al menos {self.train_images} "
-                f"imágenes en todas las vistas: {self.views}"
+                "No se encontraron combinaciones modelo-año válidas con las configuraciones especificadas"
             )
 
-        # Log de estadísticas
-        total_models = len(counts.index)
-        logging.info(f"Modelos válidos: {len(valid_models)}/{total_models}")
-
-        # Log de modelos filtrados con razones
-        filtered_models = set(counts.index) - set(valid_models)
-        if filtered_models:
-            logging.warning(f"Modelos filtrados por insuficientes imágenes: {len(filtered_models)}")
-            for model in list(filtered_models)[:5]:  # Log primeros 5
-                model_counts = counts.loc[model][self.views].to_dict()
-                logging.debug(f"  {model}: {model_counts}")
-
-        return valid_models
-
     def _initialize_label_encoder(self) -> LabelEncoder:
-        """Inicializa el encoder de etiquetas para los modelos válidos."""
+        """Inicializa el encoder de etiquetas para las combinaciones modelo-año válidas."""
         label_encoder = LabelEncoder()
-        label_encoder.fit(self.models)
-        logging.info(f"LabelEncoder inicializado con {len(self.models)} clases")
+        model_year_strings = [f"{model}_{year}" for model, year in self.model_year_combinations]
+        label_encoder.fit(model_year_strings)
+        if self.verbose:
+            logging.info(f"LabelEncoder inicializado con {len(self.model_year_combinations)} clases")
         return label_encoder
 
     def _filter_dataframe(self) -> pd.DataFrame:
-        """
-        Filtra el DataFrame para incluir solo modelos y vistas válidos.
-
-        Returns:
-            DataFrame filtrado.
-        """
+        """Filtra el DataFrame para incluir solo combinaciones modelo-año y vistas válidas."""
         initial_size = len(self.df)
         
-        filtered_df = self.df[
-            (self.df["model"].isin(self.models)) &
-            (self.df["viewpoint"].isin(self.views))
-        ].copy()
+        # Crear filtro para combinaciones válidas
+        valid_combinations = set(self.model_year_combinations)
+        df_with_combinations = self.df.copy()
+        df_with_combinations['model_year_tuple'] = list(zip(df_with_combinations['model'], df_with_combinations['released_year']))
+        
+        filtered_df = df_with_combinations[
+            (df_with_combinations['model_year_tuple'].isin(valid_combinations)) &
+            (df_with_combinations['viewpoint'].isin(self.views))
+        ].drop('model_year_tuple', axis=1)
 
         final_size = len(filtered_df)
-        logging.info(f"DataFrame filtrado: {initial_size} → {final_size} registros")
+        if self.verbose:
+            logging.info(f"DataFrame filtrado: {initial_size} → {final_size} registros")
 
         return filtered_df
 
@@ -311,14 +303,15 @@ class CarDataset(Dataset):
         # Información base
         make = rows[0]['make'].strip()
         model = rows[0]['model'].strip()
+        year = rows[0]['released_year']
         viewpoints = [row['viewpoint'] for row in rows]
 
         # Construir descripción base
         if len(viewpoints) == 1:
-            desc = f"The {viewpoints[0]} view image of a {make} {model} vehicle"
+            desc = f"The {viewpoints[0]} view image of a {make} {model} vehicle from {year}"
         else:
             viewpoint_text = " and ".join(viewpoints)
-            desc = f"The {viewpoint_text} view images of a {make} {model} vehicle"
+            desc = f"The {viewpoint_text} view images of a {make} {model} vehicle from {year}"
 
         # Agregar información adicional según configuración
         desc = self._add_additional_info(desc, rows[0])
@@ -327,11 +320,6 @@ class CarDataset(Dataset):
 
     def _add_additional_info(self, desc: str, row: pd.Series) -> str:
         """Agrega información adicional a la descripción."""
-        if self.description_include in ['released_year', 'all']:
-            released_year = row.get('released_year')
-            if pd.notna(released_year) and str(released_year) not in UNKNOWN_VALUES:
-                desc += f", year {released_year}"
-
         if self.description_include in ['type', 'all']:
             vehicle_type = row.get('type')
             if pd.notna(vehicle_type) and vehicle_type not in UNKNOWN_VALUES:
@@ -339,258 +327,206 @@ class CarDataset(Dataset):
 
         return desc
 
-    def _create_data_splits(self) -> Tuple[SplitDataset, SplitDataset, SplitDataset]:
-        """
-        Crea las divisiones train/validation/test del dataset.
-
-        Returns:
-            Tupla con (train_dataset, val_dataset, test_dataset).
-
-        Raises:
-            CarDatasetError: Si hay errores creando las divisiones.
-        """
-        logging.info("Creando divisiones del dataset...")
+    def _create_adaptive_data_splits(self) -> None:
+        """Crea las divisiones train/validation/test del dataset con estrategia adaptativa."""
+        if self.verbose:
+            logging.info("Creando divisiones adaptativas del dataset...")
 
         train_samples, val_samples, test_samples = [], [], []
 
-        for model in self.models:
-            try:
-                # Obtener imágenes del modelo para cada vista
-                model_data = self.df[
-                    (self.df['model'] == model) & 
-                    (self.df['viewpoint'].isin(self.views))
-                ]
+        # Procesar cada tipo de modelo con su estrategia específica
+        for model_year_tuple in self.abundant_models:
+            t, v, te = self._split_abundant_model(model_year_tuple)
+            train_samples.extend(t)
+            val_samples.extend(v) 
+            test_samples.extend(te)
+            
+        for model_year_tuple in self.few_shot_models:
+            t, v, te = self._split_few_shot_model(model_year_tuple)
+            train_samples.extend(t)
+            val_samples.extend(v)
+            test_samples.extend(te)
+            
+        for model_year_tuple in self.single_shot_models:
+            te = self._split_single_shot_model(model_year_tuple)
+            test_samples.extend(te)
+
+        # Asignar samples
+        self.train_samples = train_samples
+        self.val_samples = val_samples
+        self.test_samples = test_samples
+
+    def _split_abundant_model(self, model_year_tuple: Tuple[str, Any]) -> Tuple[List, List, List]:
+        """Split 80/10/10 para modelos abundantes."""
+        model, year = model_year_tuple
+        model_data = self.df[
+            (self.df['model'] == model) & 
+            (self.df['released_year'] == year) &
+            (self.df['viewpoint'].isin(self.views))
+        ]
+        
+        # Agrupar por vista y obtener paths
+        grouped = model_data.groupby('viewpoint')
+        view_images = {}
+        for view in self.views:
+            if view in grouped.groups:
+                paths = list(grouped.get_group(view)['image_path'])
+                random.shuffle(paths)
+                view_images[view] = paths
+            else:
+                view_images[view] = []
                 
-                grouped = model_data.groupby('viewpoint')
-                view_images = {}
+        # Calcular mínimo de imágenes entre vistas
+        min_images = min(len(view_images[view]) for view in self.views)
+        if min_images == 0:
+            return [], [], []
+            
+        # Aplicar ratios 80/10/10
+        ratios = ADAPTIVE_RATIOS['abundant']
+        n_train = max(1, int(min_images * ratios['train']))
+        n_val = max(1, int(min_images * ratios['val']))
+        n_test = min_images - n_train - n_val
+        n_test = max(1, n_test)
+        
+        return self._create_samples_for_splits(view_images, model_year_tuple, n_train, n_val, n_test, min_images)
+
+    def _split_few_shot_model(self, model_year_tuple: Tuple[str, Any]) -> Tuple[List, List, List]:
+        """Split 70/15/15 para modelos few-shot."""
+        model, year = model_year_tuple
+        model_data = self.df[
+            (self.df['model'] == model) & 
+            (self.df['released_year'] == year) &
+            (self.df['viewpoint'].isin(self.views))
+        ]
+        
+        grouped = model_data.groupby('viewpoint')
+        view_images = {}
+        for view in self.views:
+            if view in grouped.groups:
+                paths = list(grouped.get_group(view)['image_path'])
+                random.shuffle(paths)
+                view_images[view] = paths
+            else:
+                view_images[view] = []
                 
-                for view in self.views:
-                    if view in grouped.groups:
-                        view_images[view] = list(grouped.get_group(view)['image_path'])
-                    else:
-                        view_images[view] = []
+        min_images = min(len(view_images[view]) for view in self.views if len(view_images[view]) > 0)
+        if min_images == 0:
+            return [], [], []
+            
+        # Aplicar ratios 70/15/15
+        ratios = ADAPTIVE_RATIOS['few_shot']
+        if min_images >= 3:
+            n_train = max(1, int(min_images * ratios['train']))
+            n_val = max(1, int(min_images * ratios['val']))
+            n_test = min_images - n_train - n_val
+            n_test = max(1, n_test)
+        else:
+            # Para 2 imágenes: 1 train, 0 val, 1 test
+            n_train = 1
+            n_val = 0
+            n_test = 1
+            
+        return self._create_samples_for_splits(view_images, model_year_tuple, n_train, n_val, n_test, min_images)
 
-                # Verificar que hay suficientes imágenes
-                min_images = min(len(view_images[view]) for view in self.views)
-                if min_images < self.train_images:
-                    raise CarDatasetError(
-                        ERROR_INSUFFICIENT_IMAGES.format(model, min_images)
-                    )
-
-                # Balancear y mezclar imágenes por vista
-                random.seed(self.seed)
-                for view in self.views:
-                    random.shuffle(view_images[view])
-                    view_images[view] = view_images[view][:min_images]
-
-                # Crear divisiones
-                model_train, model_val, model_test = self._split_model_data(
-                    view_images, model
-                )
+    def _split_single_shot_model(self, model_year_tuple: Tuple[str, Any]) -> List:
+        """Solo test para modelos single-shot."""
+        model, year = model_year_tuple
+        model_data = self.df[
+            (self.df['model'] == model) & 
+            (self.df['released_year'] == year) &
+            (self.df['viewpoint'].isin(self.views))
+        ]
+        
+        grouped = model_data.groupby('viewpoint')
+        view_images = []
+        for view in self.views:
+            if view in grouped.groups:
+                paths = list(grouped.get_group(view)['image_path'])
+                view_images.append(paths)
+            else:
+                view_images.append([])
                 
-                train_samples.extend(model_train)
-                val_samples.extend(model_val)
-                test_samples.extend(model_test)
+        # Crear sample con las imágenes disponibles
+        test_samples = []
+        max_samples = max(len(paths) for paths in view_images)
+        for i in range(max_samples):
+            image_pair = [view_images[j][i] for j in range(len(self.views)) if i < len(view_images[j])]
+            if image_pair:  # Al menos una imagen disponible
+                if self.model_type in ['textual', 'both']:
+                    text_desc = self._create_text_descriptor(image_pair)
+                    test_samples.append((model_year_tuple, image_pair, text_desc))
+                else:
+                    test_samples.append((model_year_tuple, image_pair))
+                
+        return test_samples
 
-            except Exception as e:
-                raise CarDatasetError(f"Error procesando modelo {model}: {e}") from e
-
-        # Crear datasets
-        train_dataset = SplitDataset(
-            train_samples, self.label_encoder, self.df, self.transform, self.augment
-        )
-        val_dataset = SplitDataset(
-            val_samples, self.label_encoder, self.df, self.transform, augment=False
-        )
-        test_dataset = SplitDataset(
-            test_samples, self.label_encoder, self.df, self.transform, augment=False
-        )
-
-        # Log de estadísticas
-        logging.info(f"Divisiones creadas - Train: {len(train_dataset)}, "
-                    f"Val: {len(val_dataset)}, Test: {len(test_dataset)}")
-
-        return train_dataset, val_dataset, test_dataset
-
-    def _split_model_data(
+    def _create_samples_for_splits(
         self, 
         view_images: Dict[str, List[str]], 
-        model: str
+        model_year_tuple: Tuple[str, Any],
+        n_train: int, 
+        n_val: int, 
+        n_test: int, 
+        min_images: int
     ) -> Tuple[List, List, List]:
-        """Divide los datos de un modelo específico en train/val/test."""
-        # Separar imágenes de entrenamiento
-        train_paths = [view_images[view][:self.train_images] for view in self.views]
-        remaining_paths = [view_images[view][self.train_images:] for view in self.views]
-
-        # Calcular divisiones de validación y prueba
-        val_paths, test_paths = [], []
+        """Crea muestras para train/val/test."""
+        train_samples = []
+        val_samples = []
+        test_samples = []
         
-        if self.val_ratio + self.test_ratio > 0:
-            n_remaining = len(remaining_paths[0])
-            n_val = int(n_remaining * self.val_ratio) if self.val_ratio > 0 else 0
-            
-            val_paths = [paths[:n_val] for paths in remaining_paths]
-            test_paths = [paths[n_val:] for paths in remaining_paths]
-        else:
-            val_paths = [[] for _ in self.views]
-            test_paths = remaining_paths
-
-        # Crear muestras con descripciones si es necesario
-        train_samples = self._create_samples(model, train_paths)
-        val_samples = self._create_samples(model, val_paths)
-        test_samples = self._create_samples(model, test_paths)
-
-        return train_samples, val_samples, test_samples
-
-    def _create_samples(self, model: str, view_paths: List[List[str]]) -> List:
-        """Crea muestras para un conjunto de rutas."""
-        samples = []
-        max_samples = max((len(paths) for paths in view_paths), default=0)
-        
-        for i in range(max_samples):
-            # Crear par de imágenes para todas las vistas
-            image_pair = [view_paths[j][i] for j in range(len(self.views)) if i < len(view_paths[j])]
-            
+        for i in range(min_images):
+            image_pair = [view_images[view][i] for view in self.views if i < len(view_images[view])]
             if len(image_pair) == len(self.views):  # Solo si hay imagen para cada vista
                 if self.model_type in ['textual', 'both']:
                     text_desc = self._create_text_descriptor(image_pair)
-                    samples.append((model, image_pair, text_desc))
+                    sample = (model_year_tuple, image_pair, text_desc)
                 else:
-                    samples.append((model, image_pair))
-        
-        return samples
+                    sample = (model_year_tuple, image_pair)
+                
+                if i < n_train:
+                    train_samples.append(sample)
+                elif i < n_train + n_val and n_val > 0:
+                    val_samples.append(sample)
+                else:
+                    test_samples.append(sample)
+                    
+        return train_samples, val_samples, test_samples
 
-    def get_dataset_statistics(self) -> Dict[str, Any]:
+    def set_split(self, split: str) -> None:
         """
-        Obtiene estadísticas detalladas del dataset.
-
-        Returns:
-            Diccionario con estadísticas completas.
-        """
-        if not hasattr(self, 'train'):
-            return {"error": "Dataset no inicializado"}
-
-        # Calcular estadísticas por modelo
-        train_stats = self._calculate_split_stats(self.train, "train")
-        val_stats = self._calculate_split_stats(self.val, "validation")
-        test_stats = self._calculate_split_stats(self.test, "test")
-
-        return {
-            "overview": {
-                "num_models": self.num_models,
-                "num_views": self.num_views,
-                "views": self.views,
-                "train_images_per_model": self.train_images,
-                "model_type": self.model_type
-            },
-            "splits": {
-                "train": train_stats,
-                "validation": val_stats,
-                "test": test_stats
-            },
-            "models": self.models[:10],  # Primeros 10 modelos
-            "total_models": len(self.models)
-        }
-
-    def _calculate_split_stats(self, dataset: SplitDataset, split_name: str) -> Dict:
-        """Calcula estadísticas para una división del dataset."""
-        if len(dataset) == 0:
-            return {"total_samples": 0}
-
-        samples_per_model = []
-        for model in self.models:
-            count = len([s for s in dataset.samples if s[0] == model])
-            samples_per_model.append(count)
-
-        samples_array = np.array(samples_per_model)
-        
-        return {
-            "total_samples": len(dataset),
-            "samples_per_model_mean": float(samples_array.mean()),
-            "samples_per_model_std": float(samples_array.std()),
-            "samples_per_model_min": int(samples_array.min()),
-            "samples_per_model_max": int(samples_array.max())
-        }
-
-    def __str__(self) -> str:
-        """Representación string detallada del dataset."""
-        if not hasattr(self, 'train'):
-            return "CarDataset(no inicializado)"
-
-        lines = ["=== Car Dataset Overview ==="]
-        lines.append(f"Views: {self.views}")
-        lines.append(f"Number of models: {self.num_models}")
-        lines.append(f"Train images per model per view: {self.train_images}")
-        lines.append(f"Val ratio: {self.val_ratio}, Test ratio: {self.test_ratio}")
-        lines.append(f"Model type: {self.model_type}")
-        lines.append(f"Description includes: {self.description_include or 'basic info only'}")
-        lines.append("")
-        
-        # Estadísticas de divisiones
-        for split_name, dataset in [("Train", self.train), ("Validation", self.val), ("Test", self.test)]:
-            if len(dataset) > 0:
-                stats = self._calculate_split_stats(dataset, split_name.lower())
-                lines.append(f"{split_name} split:")
-                lines.append(f"  Total samples: {stats['total_samples']}")
-                lines.append(f"  Samples per model - Mean: {stats['samples_per_model_mean']:.1f}, "
-                           f"Std: {stats['samples_per_model_std']:.1f}")
-            else:
-                lines.append(f"{split_name} split: 0 samples")
-        
-        return "\n".join(lines)
-
-    def __repr__(self) -> str:
-        """Representación concisa para debugging."""
-        status = "inicializado" if hasattr(self, 'train') else "no inicializado"
-        return (f"CarDataset(models={self.num_models if hasattr(self, 'num_models') else 'N/A'}, "
-                f"views={len(self.views)}, status={status})")
-
-
-class SplitDataset(Dataset):
-    """
-    Dataset para una división específica (train/val/test).
-
-    Esta clase maneja las muestras de una división específica del dataset,
-    aplicando transformaciones y augmentación según corresponda.
-
-    Attributes:
-        samples: Lista de muestras (model, paths, [text_desc]).
-        label_encoder: Encoder para convertir modelos a etiquetas numéricas.
-        transform: Transformaciones a aplicar a las imágenes.
-        augment: Si aplicar augmentación de datos.
-    """
-
-    def __init__(
-        self,
-        samples: List[Tuple],
-        label_encoder: LabelEncoder,
-        df: pd.DataFrame,
-        transform: Optional[Any] = None,
-        augment: bool = False
-    ) -> None:
-        """
-        Inicializa el dataset de división.
+        Cambia el split actual del dataset.
 
         Args:
-            samples: Lista de muestras del dataset.
-            label_encoder: Encoder de etiquetas preentrenado.
-            df: DataFrame con información completa incluyendo bounding boxes.
-            transform: Transformaciones para las imágenes.
-            augment: Si aplicar augmentación horizontal flip.
+            split: 'train', 'val' o 'test'.
+
+        Raises:
+            ValueError: Si el split no es válido.
         """
-        self.samples = samples
-        self.label_encoder = label_encoder
-        self.df = df
-        self.transform = transform
-        self.augment = augment
+        if split not in ['train', 'val', 'test']:
+            raise ValueError("split debe ser 'train', 'val' o 'test'")
+        
+        self.current_split = split
+        if self.verbose:
+            logging.info(f"Dataset configurado para split: {split}")
+
+    def get_current_samples(self) -> List:
+        """Obtiene las muestras del split actual."""
+        if self.current_split == 'train':
+            return self.train_samples
+        elif self.current_split == 'val':
+            return self.val_samples
+        elif self.current_split == 'test':
+            return self.test_samples
+        else:
+            raise ValueError(f"Split no válido: {self.current_split}")
 
     def __len__(self) -> int:
-        """Retorna el número de muestras."""
-        return len(self.samples)
+        """Retorna el número de muestras del split actual."""
+        return len(self.get_current_samples())
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         """
-        Obtiene una muestra del dataset.
+        Obtiene una muestra del dataset según el split actual.
 
         Args:
             idx: Índice de la muestra.
@@ -603,16 +539,17 @@ class SplitDataset(Dataset):
             Exception: Para otros errores de procesamiento.
         """
         try:
-            sample = self.samples[idx]
+            current_samples = self.get_current_samples()
+            sample = current_samples[idx]
             
             # Extraer información de la muestra
             if len(sample) == 3:
-                model, paths, text_desc = sample
+                model_year_tuple, paths, text_desc = sample
             else:
-                model, paths = sample
+                model_year_tuple, paths = sample
                 text_desc = None
 
-            # Cargar imágenes con bounding boxes
+            # Cargar imágenes con bounding boxes si están disponibles
             images = []
             for path in paths:
                 try:
@@ -624,14 +561,14 @@ class SplitDataset(Dataset):
                         # Buscar la bbox correspondiente en el DataFrame
                         matching_rows = self.df[self.df['image_path'] == path]
                         if not matching_rows.empty:
-                            bbox = matching_rows.iloc[0]['bbox']
+                            bbox = matching_rows.iloc[0].get('bbox')
                     
                     images.append((img, bbox))
                 except Exception as e:
                     raise FileNotFoundError(f"No se pudo cargar imagen {path}: {e}") from e
 
-            # Aplicar augmentación si está habilitada
-            if self.augment:
+            # Aplicar augmentación solo en training
+            if self.augment and self.current_split == 'train':
                 images = [
                     (F.hflip(img) if random.random() > 0.5 else img, bbox)
                     for img, bbox in images
@@ -652,15 +589,23 @@ class SplitDataset(Dataset):
                 images = [img for img, _ in images]
 
             # Crear etiqueta
+            model_year_string = f"{model_year_tuple[0]}_{model_year_tuple[1]}"
             label = torch.tensor(
-                self.label_encoder.transform([model])[0], 
+                self.label_encoder.transform([model_year_string])[0], 
                 dtype=torch.long
             )
 
             # Preparar salida
+            # Convertir lista de imágenes a tensor
+            if len(images) == 1:
+                image_tensor = images[0]  # Tensor único
+            else:
+                image_tensor = torch.stack(images)  # Stack múltiples tensores
+
             output = {
-                "images": images,
-                "labels": label
+                "images": image_tensor,
+                "labels": label,
+                "model_name": model_year_string
             }
 
             if text_desc is not None:
@@ -669,68 +614,304 @@ class SplitDataset(Dataset):
             return output
 
         except Exception as e:
-            logging.error(f"Error cargando muestra {idx}: {e}")
+            logging.error(f"Error cargando muestra {idx} del split {self.current_split}: {e}")
             raise
 
-    def get_sample_info(self, idx: int) -> Dict[str, Any]:
-        """
-        Obtiene información de una muestra sin cargar las imágenes.
+    def get_dataset_statistics(self) -> Dict[str, Any]:
+        """Obtiene estadísticas detalladas del dataset."""
+        # Calcular estadísticas por split
+        train_stats = self._calculate_split_stats(self.train_samples, "train")
+        val_stats = self._calculate_split_stats(self.val_samples, "validation")
+        test_stats = self._calculate_split_stats(self.test_samples, "test")
 
-        Args:
-            idx: Índice de la muestra.
-
-        Returns:
-            Diccionario con información de la muestra.
-        """
-        if idx >= len(self.samples):
-            raise IndexError(f"Índice fuera de rango: {idx}")
-
-        sample = self.samples[idx]
-        
-        info = {
-            "index": idx,
-            "model": sample[0],
-            "image_paths": sample[1],
-            "num_images": len(sample[1])
+        return {
+            "overview": {
+                "num_model_year_combinations": self.num_models,
+                "num_views": self.num_views,
+                "views": self.views,
+                "min_images_for_abundant_class": self.min_images_for_abundant_class,
+                "model_type": self.model_type,
+                "adaptive_strategy": {
+                    "abundant": len(self.abundant_models),
+                    "few_shot": len(self.few_shot_models),
+                    "single_shot": len(self.single_shot_models)
+                }
+            },
+            "splits": {
+                "train": train_stats,
+                "validation": val_stats,
+                "test": test_stats
+            },
+            "sample_combinations": self.model_year_combinations[:10],  # Primeros 10
+            "total_combinations": len(self.model_year_combinations)
         }
 
-        if len(sample) == 3:
-            info["text_description"] = sample[2]
+    def _calculate_split_stats(self, samples: List, split_name: str) -> Dict:
+        """Calcula estadísticas para una división del dataset."""
+        if len(samples) == 0:
+            return {"total_samples": 0}
 
-        return info
+        samples_per_combination = []
+        for model_year_tuple in self.model_year_combinations:
+            count = len([s for s in samples if s[0] == model_year_tuple])
+            samples_per_combination.append(count)
+
+        samples_array = np.array(samples_per_combination)
+        
+        return {
+            "total_samples": len(samples),
+            "samples_per_combination_mean": float(samples_array.mean()),
+            "samples_per_combination_std": float(samples_array.std()),
+            "samples_per_combination_min": int(samples_array.min()),
+            "samples_per_combination_max": int(samples_array.max())
+        }
+
+    def __str__(self) -> str:
+        """Representación string detallada del dataset."""
+        lines = ["=== Car Dataset Overview (Adaptive Strategy) ==="]
+        lines.append(f"Views: {self.views}")
+        lines.append(f"Number of model-year combinations: {self.num_models}")
+        lines.append(f"Min images for abundant class: {self.min_images_for_abundant_class}")
+        lines.append(f"Model type: {self.model_type}")
+        lines.append(f"Description includes: {self.description_include or 'basic info only'}")
+        lines.append(f"Current split: {self.current_split}")
+        lines.append("")
+        lines.append("Distribution strategy:")
+        lines.append(f"  - Abundant models (≥{self.min_images_for_abundant_class} imgs): {len(self.abundant_models)}")
+        lines.append(f"  - Few-shot models (2-{self.min_images_for_abundant_class-1} imgs): {len(self.few_shot_models)}")
+        lines.append(f"  - Single-shot models (1 img): {len(self.single_shot_models)}")
+        lines.append("")
+        
+        # Estadísticas de divisiones
+        splits_data = [
+            ("Train", self.train_samples),
+            ("Validation", self.val_samples), 
+            ("Test", self.test_samples)
+        ]
+        
+        for split_name, samples in splits_data:
+            if len(samples) > 0:
+                stats = self._calculate_split_stats(samples, split_name.lower())
+                lines.append(f"{split_name} split:")
+                lines.append(f"  Total samples: {stats['total_samples']}")
+                lines.append(f"  Samples per combination - Mean: {stats['samples_per_combination_mean']:.1f}, "
+                           f"Std: {stats['samples_per_combination_std']:.1f}")
+            else:
+                lines.append(f"{split_name} split: 0 samples")
+        
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        """Representación concisa para debugging."""
+        return (f"CarDataset(combinations={self.num_models}, "
+                f"views={len(self.views)}, strategy=adaptive, split={self.current_split})")
+
+
+class IdentitySampler(BatchSampler):
+    """
+    BatchSampler P×K para contrastive learning.
+    
+    Este sampler crea batches con P clases y K muestras por clase,
+    útil para entrenamiento con pérdidas contrastivas donde necesitas
+    múltiples ejemplos de la misma clase en cada batch.
+    
+    Args:
+        samples: Lista de muestras del dataset de entrenamiento.
+        P: Número de clases por batch.
+        K: Número de muestras por clase en cada batch.
+        seed: Semilla para reproducibilidad.
+    """
+    
+    def __init__(
+        self, 
+        samples: List[Tuple], 
+        P: int = DEFAULT_P, 
+        K: int = DEFAULT_K, 
+        seed: int = DEFAULT_SEED
+    ):
+        self.samples = samples
+        self.P = P
+        self.K = K
+        self.seed = seed
+        
+        # Agrupar índices por clase (modelo_año_tuple)
+        self.class_to_indices = {}
+        for idx, sample in enumerate(samples):
+            model_year_tuple = sample[0]  # (model, year) tuple
+            if model_year_tuple not in self.class_to_indices:
+                self.class_to_indices[model_year_tuple] = []
+            self.class_to_indices[model_year_tuple].append(idx)
+            
+        self.classes = list(self.class_to_indices.keys())
+        self.batch_size = self.P * self.K
+        
+        # Filtrar clases que tienen al menos K muestras
+        valid_classes = [
+            cls for cls in self.classes 
+            if len(self.class_to_indices[cls]) >= self.K
+        ]
+        
+        if len(valid_classes) < self.P:
+            logging.warning(f"Solo {len(valid_classes)} clases tienen ≥{self.K} muestras. "
+                          f"Se necesitan al menos {self.P} para el sampler P×K.")
+            # Usar todas las clases disponibles si no hay suficientes
+            self.valid_classes = self.classes
+            self.P = min(self.P, len(self.classes))
+        else:
+            self.valid_classes = valid_classes
+        
+        # Calcular número de batches posibles
+        min_samples_per_class = min(
+            len(self.class_to_indices[cls]) for cls in self.valid_classes
+        ) if self.valid_classes else 0
+        
+        self.num_batches = max(1, min_samples_per_class // self.K * len(self.valid_classes) // self.P)
+        
+        logging.info(f"IdentitySampler configurado: P={self.P}, K={self.K}, "
+                    f"clases válidas={len(self.valid_classes)}, batches={self.num_batches}")
+        
+    def __iter__(self):
+        random.seed(self.seed)
+        
+        for batch_num in range(self.num_batches):
+            batch_indices = []
+            
+            # Seleccionar P clases aleatoriamente
+            if len(self.valid_classes) >= self.P:
+                selected_classes = random.sample(self.valid_classes, self.P)
+            else:
+                # Si no hay suficientes clases válidas, usar las que hay
+                selected_classes = random.choices(self.valid_classes, k=self.P)
+            
+            for cls in selected_classes:
+                class_indices = self.class_to_indices[cls].copy()
+                random.shuffle(class_indices)
+                
+                # Tomar K muestras de esta clase
+                selected = class_indices[:min(self.K, len(class_indices))]
+                batch_indices.extend(selected)
+                
+                # Si la clase no tiene suficientes muestras, rellenar con repeticiones
+                while len(selected) < self.K and class_indices:
+                    additional = random.choice(class_indices)
+                    selected.append(additional)
+                    batch_indices.append(additional)
+                    if len(selected) >= self.K:
+                        break
+            
+            # Asegurar tamaño de batch correcto
+            while len(batch_indices) < self.batch_size:
+                random_class = random.choice(self.valid_classes)
+                random_idx = random.choice(self.class_to_indices[random_class])
+                batch_indices.append(random_idx)
+                
+            yield batch_indices[:self.batch_size]
+            
+    def __len__(self):
+        return self.num_batches
 
 
 # Funciones de conveniencia
 def create_car_dataset(
     df: pd.DataFrame,
     views: List[str] = None,
-    train_images: int = 5,
-    val_ratio: float = 0.5,
-    test_ratio: float = 0.5,
-    **kwargs
-) -> CarDataset:
+    min_images_for_abundant_class: int = DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS,
+    P: int = DEFAULT_P,
+    K: int = DEFAULT_K,
+    transform=None,
+    augment: bool = True,
+    batch_size: int = 32,
+    num_workers: int = 4,
+    seed: int = DEFAULT_SEED,
+    **dataset_kwargs
+) -> Dict[str, Any]:
     """
-    Función de conveniencia para crear un dataset de vehículos.
-
+    Crea dataset con estrategia adaptativa y DataLoaders listos para usar.
+    
     Args:
-        df: DataFrame con los datos.
-        views: Vistas a incluir.
-        train_images: Imágenes de entrenamiento por modelo.
-        split_ratios: Tupla con (val_ratio, test_ratio).
-        **kwargs: Argumentos adicionales para CarDataset.
-
+        df: DataFrame con datos del dataset.
+        views: Lista de vistas a incluir.
+        min_images_for_abundant_class: Umbral para clases abundantes.
+        P: Número de clases por batch para contrastive learning (solo train).
+        K: Número de muestras por clase por batch (solo train).
+        transform: Transformaciones para imágenes.
+        augment: Si aplicar augmentación en entrenamiento.
+        batch_size: Tamaño de batch para val y test.
+        num_workers: Número de workers para DataLoaders.
+        seed: Semilla para reproducibilidad.
+        **dataset_kwargs: Argumentos adicionales para CarDataset.
+    
     Returns:
-        CarDataset configurado.
+        Diccionario con 'dataset', 'train_loader', 'val_loader', 'test_loader', 'train_sampler'.
     """
-
-    return CarDataset(
+    
+    # Crear dataset principal
+    dataset = CarDataset(
         df=df,
         views=views,
-        train_images=train_images,
-        val_ratio=val_ratio,
-        test_ratio=test_ratio,
-        **kwargs
+        min_images_for_abundant_class=min_images_for_abundant_class,
+        transform=transform,
+        augment=augment,
+        seed=seed,
+        **dataset_kwargs
     )
+    
+    # Train loader con IdentitySampler P×K
+    train_sampler = IdentitySampler(dataset.train_samples, P=P, K=K, seed=seed)
+    
+    # Crear copias del dataset para cada split (evita repetir inicialización)
+    train_dataset = copy.deepcopy(dataset)
+    train_dataset.augment = augment  # Asegurar augmentación para train
+    train_dataset.verbose = False     # Silenciar logs en copias
+    train_dataset.set_split('train')
+    
+    train_loader = DataLoader(
+        train_dataset,
+        batch_sampler=train_sampler,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+    
+    # Val loader
+    val_dataset = copy.deepcopy(dataset)
+    val_dataset.augment = False   # Sin augmentación para validación
+    val_dataset.verbose = False   # Silenciar logs en copias
+    val_dataset.set_split('val')
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+    
+    # Test loader
+    test_dataset = copy.deepcopy(dataset)
+    test_dataset.augment = False  # Sin augmentación para test
+    test_dataset.verbose = False  # Silenciar logs en copias
+    test_dataset.set_split('test')
+    
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+    
+    logging.info(f"DataLoaders creados:")
+    logging.info(f"  - Train: {len(train_loader)} batches de tamaño {P}×{K}={P*K}")
+    logging.info(f"  - Val: {len(val_loader)} batches de tamaño {batch_size}")
+    logging.info(f"  - Test: {len(test_loader)} batches de tamaño {batch_size}")
+    
+    return {
+        "dataset": dataset,
+        "train_loader": train_loader,
+        "val_loader": val_loader,
+        "test_loader": test_loader,
+        "train_sampler": train_sampler
+    }
 
 
 def validate_dataset_structure(df: pd.DataFrame) -> Dict[str, Any]:
@@ -743,7 +924,7 @@ def validate_dataset_structure(df: pd.DataFrame) -> Dict[str, Any]:
     Returns:
         Diccionario con información de validación.
     """
-    required_columns = {'model', 'viewpoint', 'image_path'}
+    required_columns = {'model', 'released_year', 'viewpoint', 'image_path'}
     missing_columns = required_columns - set(df.columns)
     
     validation = {
@@ -751,20 +932,57 @@ def validate_dataset_structure(df: pd.DataFrame) -> Dict[str, Any]:
         "missing_columns": list(missing_columns),
         "total_records": len(df),
         "unique_models": df['model'].nunique() if 'model' in df.columns else 0,
+        "unique_years": df['released_year'].nunique() if 'released_year' in df.columns else 0,
         "unique_viewpoints": df['viewpoint'].nunique() if 'viewpoint' in df.columns else 0,
         "available_viewpoints": df['viewpoint'].unique().tolist() if 'viewpoint' in df.columns else []
     }
 
     if validation["valid"]:
         # Estadísticas adicionales si es válido
-        model_counts = df['model'].value_counts()
-        validation.update({
-            "models_with_min_images": {
-                "10+": (model_counts >= 10).sum(),
-                "50+": (model_counts >= 50).sum(),
-                "100+": (model_counts >= 100).sum()
-            },
-            "viewpoint_distribution": df['viewpoint'].value_counts().to_dict()
-        })
+        if 'model' in df.columns and 'released_year' in df.columns:
+            model_year_counts = df.groupby(['model', 'released_year']).size()
+            validation.update({
+                "unique_model_year_combinations": len(model_year_counts),
+                "model_year_combinations_with_min_images": {
+                    "1+": (model_year_counts >= 1).sum(),
+                    "5+": (model_year_counts >= 5).sum(),
+                    "10+": (model_year_counts >= 10).sum(),
+                    "50+": (model_year_counts >= 50).sum()
+                },
+                "viewpoint_distribution": df['viewpoint'].value_counts().to_dict()
+            })
 
     return validation
+
+
+def create_adaptive_loaders(
+    df: pd.DataFrame,
+    views: List[str] = None,
+    min_images_for_abundant_class: int = DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS,
+    P: int = DEFAULT_P,
+    K: int = DEFAULT_K,
+    transform=None,
+    augment: bool = True,
+    batch_size: int = 32,
+    num_workers: int = 4,
+    seed: int = DEFAULT_SEED,
+    **dataset_kwargs
+) -> Dict[str, Any]:
+    """
+    Alias para create_car_dataset para mantener compatibilidad.
+    
+    Crea dataset con estrategia adaptativa y DataLoaders optimizados.
+    """
+    return create_car_dataset(
+        df=df,
+        views=views,
+        min_images_for_abundant_class=min_images_for_abundant_class,
+        P=P,
+        K=K,
+        transform=transform,
+        augment=augment,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        seed=seed,
+        **dataset_kwargs
+    )

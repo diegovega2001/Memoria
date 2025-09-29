@@ -18,8 +18,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.models as models
-from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader
+from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
 # Configuración de warnings y logging
@@ -31,6 +31,7 @@ logging.basicConfig(
 
 # Constantes del modelo
 DEFAULT_BATCH_SIZE = 32
+DEFAULT_NUM_WORKERS = 0
 DEFAULT_WARMUP_EPOCHS = 0
 WEIGHTS_FILENAME = 'vision_model.pth'
 SUPPORTED_MODEL_ATTRIBUTES = {'fc', 'heads', 'classifier', 'head'}
@@ -92,11 +93,11 @@ class MultiViewVisionModel(nn.Module):
         self,
         name: str,
         model_name: str,
-        weights: str,
-        device: torch.device,
-        dataset: Any,  # CarDataset
+        weights: str = 'IMAGENET1K_V1',
+        device: torch.device = None,
+        dataset_dict: dict = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
-        num_workers: int = 0,
+        num_workers: int = DEFAULT_NUM_WORKERS,
         pin_memory: bool = True
     ) -> None:
         """
@@ -107,7 +108,7 @@ class MultiViewVisionModel(nn.Module):
             model_name: Nombre del modelo en torchvision.models.
             weights: Identificador de pesos pre-entrenados.
             device: Dispositivo de cómputo.
-            dataset: Dataset con divisiones train/val/test.
+            dataset_dict: Diccionario con el dataset y los dataloaders con divisiones train/val/test.
             batch_size: Tamaño de batch.
             num_workers: Número de workers para DataLoaders.
             pin_memory: Si usar pin_memory en DataLoaders.
@@ -118,15 +119,18 @@ class MultiViewVisionModel(nn.Module):
         """
         super().__init__()
 
-        # Validación de parámetros
-        self._validate_parameters(name, model_name, weights, device, dataset, batch_size)
+        # Validar parámetros
+        self._validate_parameters(name, model_name, device, dataset_dict, batch_size)
 
         # Configuración básica
         self.name = name
         self.model_name = model_name
         self.weights = weights
         self.device = device
-        self.dataset = dataset
+        self.dataset = dataset_dict['dataset']
+        self.train_loader = dataset_dict['train_loader']
+        self.val_loader = dataset_dict['val_loader']
+        self.test_loader = dataset_dict['test_loader']
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
@@ -139,11 +143,6 @@ class MultiViewVisionModel(nn.Module):
         self._replace_final_layer()
         self.classification_layer = self._create_classification_layer()
 
-        # Inicialización de DataLoaders
-        self.train_loader = self._create_dataloader(dataset.train, shuffle=True)
-        self.val_loader = self._create_dataloader(dataset.val, shuffle=False)
-        self.test_loader = self._create_dataloader(dataset.test, shuffle=False)
-
         # Mover a dispositivo
         self.to(device)
 
@@ -155,10 +154,9 @@ class MultiViewVisionModel(nn.Module):
         self,
         name: str,
         model_name: str,
-        weights: str,
         device: torch.device,
-        dataset: Any,
-        batch_size: int
+        dataset_dict: dict,
+        batch_size: int,
     ) -> None:
         """Valida los parámetros de entrada."""
         if not name or not isinstance(name, str):
@@ -175,12 +173,16 @@ class MultiViewVisionModel(nn.Module):
 
         if batch_size <= 0:
             raise ValueError("batch_size debe ser mayor que 0")
-
-        # Validar que el dataset tenga los atributos requeridos
-        required_attrs = ['train', 'val', 'test', 'num_models', 'num_views']
-        missing_attrs = [attr for attr in required_attrs if not hasattr(dataset, attr)]
-        if missing_attrs:
-            raise VisionModelError(f"Dataset falta atributos: {missing_attrs}")
+        
+        if dataset_dict['train_loader'] is None or dataset_dict['val_loader'] is None or dataset_dict['test_loader'] is None:
+            raise ValueError("Todos los DataLoaders (train_loader, val_loader, test_loader) son requeridos")
+            
+        if not isinstance(dataset_dict['train_loader'], DataLoader):
+            raise ValueError("train_loader debe ser un DataLoader")
+        if not isinstance(dataset_dict['val_loader'], DataLoader):
+            raise ValueError("val_loader debe ser un DataLoader")
+        if not isinstance(dataset_dict['test_loader'], DataLoader):
+            raise ValueError("test_loader debe ser un DataLoader")
 
     def _initialize_base_model(self) -> nn.Module:
         """Inicializa el modelo base de torchvision."""
@@ -278,16 +280,6 @@ class MultiViewVisionModel(nn.Module):
         logging.debug(f"Capa de clasificación creada: {input_dim} → {output_dim}")
         return classification_layer
 
-    def _create_dataloader(self, dataset: Any, shuffle: bool) -> DataLoader:
-        """Crea un DataLoader con configuración optimizada."""
-        return DataLoader(
-            dataset,
-            batch_size=self.batch_size,
-            shuffle=shuffle,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory and self.device.type == 'cuda',
-            drop_last=False
-        )
 
     def extract_embeddings(
         self,
@@ -319,11 +311,11 @@ class MultiViewVisionModel(nn.Module):
                 for batch in iterator:
                     images = batch['images']
                     
-                    # Procesar cada vista y concatenar
-                    batch_embeddings = torch.cat([
-                        torch.flatten(self.model(image.to(self.device)), start_dim=1)
-                        for image in images
-                    ], dim=1)
+                    # Procesar el batch completo (no imagen por imagen)
+                    batch_embeddings = torch.flatten(
+                        self.model(images.to(self.device)), 
+                        start_dim=1
+                    )
                     
                     embeddings.append(batch_embeddings.cpu())
 
@@ -487,10 +479,10 @@ class MultiViewVisionModel(nn.Module):
                 optimizer.zero_grad()
 
                 # Forward pass
-                embeddings = torch.cat([
-                    torch.flatten(self.model(img.to(self.device)), start_dim=1) 
-                    for img in images
-                ], dim=1)
+                embeddings = torch.flatten(
+                    self.model(images.to(self.device)), 
+                    start_dim=1
+                )
                 
                 outputs = self.classification_layer(embeddings)
                 loss = criterion(outputs, labels)
@@ -520,10 +512,10 @@ class MultiViewVisionModel(nn.Module):
                     labels = batch['labels'].to(self.device)
 
                     # Forward pass
-                    embeddings = torch.cat([
-                        torch.flatten(self.model(img.to(self.device)), start_dim=1)
-                        for img in images
-                    ], dim=1)
+                    embeddings = torch.flatten(
+                        self.model(images.to(self.device)), 
+                        start_dim=1
+                    )
                     
                     outputs = self.classification_layer(embeddings)
                     loss = criterion(outputs, labels)
@@ -569,10 +561,10 @@ class MultiViewVisionModel(nn.Module):
                 images = batch['images']
                 labels = batch['labels'].to(self.device)
 
-                embeddings = torch.cat([
-                    torch.flatten(self.model(img.to(self.device)), start_dim=1)
-                    for img in images
-                ], dim=1)
+                embeddings = torch.flatten(
+                    self.model(images.to(self.device)), 
+                    start_dim=1
+                )
                 
                 outputs = self.classification_layer(embeddings)
                 _, predicted = outputs.max(1)
@@ -781,7 +773,7 @@ class MultiViewVisionModel(nn.Module):
 # Funciones de conveniencia
 def create_vision_model(
     model_name: str,
-    dataset: Any,
+    dataset_dict: dict,
     device: Optional[torch.device] = None,
     weights: str = 'DEFAULT',
     batch_size: int = DEFAULT_BATCH_SIZE,
@@ -811,7 +803,7 @@ def create_vision_model(
         model_name=model_name,
         weights=weights,
         device=device,
-        dataset=dataset,
+        dataset_dict=dataset_dict,
         batch_size=batch_size,
         **kwargs
     )

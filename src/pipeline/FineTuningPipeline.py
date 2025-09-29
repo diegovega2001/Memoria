@@ -49,7 +49,7 @@ class FineTuningPipeline:
     Attributes:
         config: Configuración del pipeline.
         df: DataFrame con datos del dataset.
-        dataset: Dataset creado para entrenamiento.
+        dataset_dict: Diccionario con dataset, dataloaders y test sampler.
         model: Modelo de visión para fine-tuning.
         results: Diccionario con resultados del entrenamiento.
         
@@ -78,7 +78,7 @@ class FineTuningPipeline:
         self.experiment_name = experiment_name or f"finetune_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         # Componentes del pipeline
-        self.dataset = None
+        self.dataset_dict = None
         self.model = None
         self.results = {
             'config': config.copy(),
@@ -100,12 +100,10 @@ class FineTuningPipeline:
         )
         
         # Crear dataset
-        self.dataset = create_car_dataset(
+        self.dataset_dict = create_car_dataset(
             df=self.df,
             views=self.config.get('views', ['front']),
-            train_images=self.config.get('train_images', 3),
-            val_ratio=self.config.get('val_ratio', 0.5),
-            test_ratio=self.config.get('test_ratio', 0.5),
+            min_images_for_abundant_class=self.config.get('min_images_for_abundant_class', 6),
             seed=self.config.get('seed', 3),
             transform=transform,
             augment=self.config.get('augment', False),
@@ -114,15 +112,12 @@ class FineTuningPipeline:
         )
         
         # Guardar estadísticas del dataset
-        dataset_stats = self.dataset.get_dataset_statistics()
+        dataset_stats = self.dataset_dict['dataset'].get_dataset_statistics()
         self.results['dataset_stats'] = dataset_stats
-        
-        logging.info(f"Dataset creado - Modelos: {self.dataset.num_models}")
-        logging.info(f"Train: {len(self.dataset.train)}, Val: {len(self.dataset.val)}, Test: {len(self.dataset.test)}")
-    
+            
     def create_model(self) -> None:
         """Crea e inicializa el modelo."""
-        if self.dataset is None:
+        if self.dataset_dict is None:
             raise FineTuningPipelineError("Dataset no creado. Ejecutar create_dataset() primero.")
         
         logging.info("Creando modelo...")
@@ -134,7 +129,7 @@ class FineTuningPipeline:
             model_name=self.config.get('model_name', 'resnet50'),
             weights=self.config.get('weights', 'IMAGENET1K_V1'),
             device=device,
-            dataset=self.dataset,
+            dataset_dict=self.dataset_dict,
             batch_size=self.config.get('batch_size', 32),
             num_workers=self.config.get('num_workers', 0),
             pin_memory=self.config.get('pin_memory', True)
@@ -143,10 +138,6 @@ class FineTuningPipeline:
         # Guardar información del modelo
         model_info = self.model.get_model_info()
         self.results['model_info'] = model_info
-        
-        logging.info(f"Modelo creado: {self.model.name}")
-        logging.info(f"Dispositivo: {device}")
-        logging.info(f"Embedding dim: {self.model.embedding_dim}")
     
     def extract_baseline_embeddings(self) -> torch.Tensor:
         """Extrae embeddings antes del fine-tuning."""
@@ -175,16 +166,14 @@ class FineTuningPipeline:
         """Ejecuta el fine-tuning del modelo."""
         if self.model is None:
             raise FineTuningPipelineError("Modelo no creado. Ejecutar create_model() primero.")
-        
-        logging.info("Iniciando fine-tuning...")
-        
+                
         # Configurar criterio de pérdida desde config
         criterion_name = self.config.get('finetune criterion', 'CrossEntropyLoss')
         criterion_cls = getattr(torch.nn, criterion_name)
         criterion = criterion_cls()
         
         # Configurar optimizador desde config
-        optimizer_type = self.config.get('finetune optimizer type', 'Adam')
+        optimizer_type = self.config.get('finetune optimizer type', 'AdamW')
         base_lr = self.config.get('finetune optimizer lr', 1e-4)
         head_lr = self.config.get('finetune optimizer head_lr', base_lr)
         weight_decay = self.config.get('finetune optimizer weight_decay', 1e-6)
@@ -228,9 +217,6 @@ class FineTuningPipeline:
             'best_val_accuracy': max(training_history['val_accuracy']),
             'total_epochs': len(training_history['train_loss'])
         }
-        
-        logging.info("Fine-tuning completado!")
-        logging.info(f"Mejor val accuracy: {max(training_history['val_accuracy']):.4f}")
         
         return training_history
     
@@ -351,13 +337,13 @@ class FineTuningPipeline:
             self.create_model()
             
             # 3. Extraer embeddings baseline
-            baseline_embeddings = self.extract_baseline_embeddings()
+            self.extract_baseline_embeddings()
             
             # 4. Fine-tuning
-            training_history = self.run_finetuning()
+            self.run_finetuning()
             
             # 5. Extraer embeddings post fine-tuning
-            finetuned_embeddings = self.extract_finetuned_embeddings()
+            self.extract_finetuned_embeddings()
             
             # 6. Calcular mejora
             baseline_acc = self.results['baseline']['evaluation']['accuracy']

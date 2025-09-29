@@ -7,14 +7,15 @@ y datasets personalizados para PyTorch.
 
 Classes:
     DataFrameMaker: Generador de dataset CSV a partir del CompCars dataset
-    CarDataset: Dataset personalizado para clasificación multi-vista
-    SplitDataset: Dataset con splits train/val/test
+    CarDataset: Dataset personalizado con estrategia adaptativa para clasificación multi-vista
+    IdentitySampler: BatchSampler P×K para contrastive learning
     CompCarsDatasetError: Excepción para errores del dataset CompCars
     CarDatasetError: Excepción para errores del dataset de vehículos
 
 Functions:
     create_compcars_dataset: Factory function para crear dataset CompCars
     create_car_dataset: Factory function para crear CarDataset
+    create_adaptive_loaders: Factory function para crear DataLoaders con estrategia adaptativa
     validate_dataset_structure: Validador de estructura de DataFrame
 """
 
@@ -24,7 +25,7 @@ from __future__ import annotations
 from .DataFrameMaker import DataFrameMaker, CompCarsDatasetError, create_compcars_dataset
 from .MyDataset import (
     CarDataset,
-    SplitDataset,
+    IdentitySampler,
     CarDatasetError,
     create_car_dataset,
     validate_dataset_structure,
@@ -35,7 +36,7 @@ __all__ = [
     # Classes
     'DataFrameMaker',
     'CarDataset', 
-    'SplitDataset',
+    'IdentitySampler',
     # Exceptions
     'CompCarsDatasetError',
     'CarDatasetError',
