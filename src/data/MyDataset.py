@@ -33,7 +33,7 @@ logging.basicConfig(
 # Constantes del dataset
 DEFAULT_VIEWS = ['front', 'rear']
 DEFAULT_SEED = 3
-DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS = 6
+DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS = 5  
 DEFAULT_P = 8  # Número de clases por batch para contrastive learning
 DEFAULT_K = 4  # Número de muestras por clase en cada batch
 MODEL_TYPES = {'vision', 'textual', 'both'}
@@ -127,7 +127,7 @@ class CarDataset(Dataset):
         self.num_views = len(self.views)
         self.min_images_for_abundant_class = min_images_for_abundant_class
         self.seed = seed
-        self.transform = transform
+        self.transform = transform 
         self.augment = augment
         self.model_type = model_type
         self.description_include = description_include
@@ -220,6 +220,12 @@ class CarDataset(Dataset):
         few_shot_candidates = total_counts[(total_counts >= 2) & (total_counts < self.min_images_for_abundant_class)].index.tolist()
         single_shot_candidates = total_counts[total_counts == 1].index.tolist()
         
+        if self.verbose:
+            logging.info(f"Clasificación inicial:")
+            logging.info(f"  - Candidatos abundantes (>={self.min_images_for_abundant_class}): {len(abundant_candidates)}")
+            logging.info(f"  - Candidatos few-shot (2-{self.min_images_for_abundant_class-1}): {len(few_shot_candidates)}")
+            logging.info(f"  - Candidatos single-shot (1): {len(single_shot_candidates)}")
+        
         # Validar que tengan imágenes en las vistas requeridas
         self.abundant_models = []
         self.few_shot_models = []
@@ -234,8 +240,14 @@ class CarDataset(Dataset):
                 self.few_shot_models.append(model_year_tuple)
         
         for model_year_tuple in single_shot_candidates:
-            if (counts.loc[model_year_tuple][self.views] >= 1).any():
+            if (counts.loc[model_year_tuple][self.views] >= 1).all():
                 self.single_shot_models.append(model_year_tuple)
+        
+        if self.verbose:
+            logging.info(f"Después del filtrado por vistas:")
+            logging.info(f"  - Abundantes finales: {len(self.abundant_models)}")
+            logging.info(f"  - Few-shot finales: {len(self.few_shot_models)}")
+            logging.info(f"  - Single-shot finales: {len(self.single_shot_models)}")
         
         self.model_year_combinations = self.abundant_models + self.few_shot_models + self.single_shot_models
         

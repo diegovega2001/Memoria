@@ -1,550 +1,472 @@
 """
 Visualizador de clusters optimizado para análisis de embeddings.
 
-Este módulo proporciona herramientas de visualización avanzada para resultados
-de clustering, incluyendo reducción de dimensionalidad y análisis de pureza.
+Correcciones implementadas:
+- Layout en fila: cada cluster es una columna, imágenes apiladas verticalmente
+- Clusters puros: titulo muestra clase que representa
+- Clusters mixtos: clase arriba de imagen, info (count, %) abajo
+- Formato model_year: guión bajo reemplazado por espacio
+- Mejor espaciado y tamaños de figura
 """
 
 from __future__ import annotations
 
 import gc
 import logging
-import multiprocessing as mp
 import warnings
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 import umap
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 
-# Configuración de warnings y logging
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
 
 
 class ClusterVisualizer:
-    """
-    Visualizador avanzado de resultados de clustering.
-    
-    Proporciona métodos optimizados para visualización de clusters mediante
-    reducción de dimensionalidad, análisis de pureza y generación de gráficos
-    de alta calidad para análisis de embeddings de visión computacional.
-    """
-    
-    def __init__(
-        self,
-        embeddings: np.ndarray,
-        cluster_labels: np.ndarray,
-        true_labels: np.ndarray,
-        test_dataset,
-        label_encoder,
-        seed: int
-    ):
-        """
-        Inicializa el visualizador de clusters.
-        
-        Args:
-            embeddings: Array de embeddings a visualizar
-            cluster_labels: Etiquetas de cluster asignadas
-            true_labels: Etiquetas verdaderas para comparación
-            test_dataset: Dataset de test para acceso a imágenes
-            label_encoder: Codificador de etiquetas para nombres de clases
-            seed: Semilla para reproducibilidad
-        """
-        # Conversión y preprocesamiento de datos
-        if hasattr(embeddings, 'cpu'):  # Tensor de PyTorch
+    """Visualizador avanzado de resultados de clustering."""
+
+    _PALETTE = {
+        'background': '#F5F5F5',
+        'line': '#E6E6E6',
+        'title': '#171B21',
+        'axes_text': '#313131',
+        'subtitle': '#4F4F4F'
+    }
+
+    def __init__(self, embeddings: np.ndarray, cluster_labels: np.ndarray,
+                 true_labels: np.ndarray, val_samples, label_encoder, seed: int):
+        """Inicializa el visualizador de clusters."""
+        if hasattr(embeddings, 'cpu'):
             self.embeddings = embeddings.cpu().numpy().astype(np.float32)
         else:
             self.embeddings = embeddings.astype(np.float32)
-            
-        if hasattr(cluster_labels, 'cpu'):  # Tensor de PyTorch
+
+        if hasattr(cluster_labels, 'cpu'):
             self.cluster_labels = cluster_labels.cpu().numpy().astype(np.int32)
         else:
             self.cluster_labels = cluster_labels.astype(np.int32)
-            
-        if hasattr(true_labels, 'cpu'):  # Tensor de PyTorch
+
+        if hasattr(true_labels, 'cpu'):
             self.true_labels = true_labels.cpu().numpy().astype(np.int32)
         else:
             self.true_labels = true_labels.astype(np.int32)
-        
-        # Configuración
-        self.test_dataset = test_dataset
+
+        self.val_samples = val_samples
         self.label_encoder = label_encoder
-        self.seed = seed
-        
-        # Análisis automático de pureza
+        self.seed = int(seed)
         self.cluster_analysis = self._analyze_cluster_purity()
         self.model_names = self.label_encoder.classes_
-        
+
         logging.info(f"Inicializado visualizador: {len(self.embeddings)} embeddings, "
-                    f"{len(np.unique(self.cluster_labels))} clusters")
-        
+                     f"{len(np.unique(self.cluster_labels))} clusters")
+
     def _analyze_cluster_purity(self) -> Dict[int, Dict[str, Union[int, float, str]]]:
-        """
-        Analiza la pureza de cada cluster identificado.
-        
-        Calcula estadísticas detalladas para cada cluster incluyendo tamaño,
-        diversidad de modelos, pureza y distribución de clases verdaderas.
-        
-        Returns:
-            Diccionario con análisis completo por cluster
-        """
+        """Analiza la pureza de cada cluster identificado."""
         unique_clusters = np.unique(self.cluster_labels)
-        cluster_info = {}
-        
+        cluster_info: Dict[int, Dict[str, Union[int, float, str]]] = {}
+
         for cluster_id in unique_clusters:
-            if cluster_id == -1:  # Saltar puntos de ruido
+            if cluster_id == -1:
                 continue
-                
+
             mask = self.cluster_labels == cluster_id
             cluster_true_labels = self.true_labels[mask]
-            
+
             if len(cluster_true_labels) == 0:
                 continue
-            
+
             unique_models = np.unique(cluster_true_labels)
             model_counts = pd.Series(cluster_true_labels).value_counts()
-            
-            # Estadísticas de pureza mejoradas
+
             cluster_size = np.sum(mask)
-            most_common_count = model_counts.iloc[0]
-            purity = most_common_count / cluster_size
-            
-            cluster_info[cluster_id] = {
-                'size': cluster_size,
-                'n_unique_models': len(unique_models),
-                'most_common_model': model_counts.index[0],
+            most_common_count = int(model_counts.iloc[0])
+            purity = float(most_common_count / cluster_size)
+
+            cluster_info[int(cluster_id)] = {
+                'size': int(cluster_size),
+                'n_unique_models': int(len(unique_models)),
+                'most_common_model': int(model_counts.index[0]),
                 'most_common_count': most_common_count,
                 'purity': purity,
-                'diversity_index': 1.0 - purity,  # Índice de diversidad (1 - pureza)
-                'entropy': -np.sum((model_counts / cluster_size) * np.log2(model_counts / cluster_size + 1e-8)),
+                'diversity_index': 1.0 - purity,
+                'entropy': float(-np.sum((model_counts / cluster_size) * 
+                                        np.log2(model_counts / cluster_size + 1e-8))),
                 'model_distribution': model_counts.to_dict(),
                 'is_pure': len(unique_models) == 1,
-                'is_dominant': purity >= 0.8  # Cluster con > 80% de una clase
+                'is_mixed': len(unique_models) > 1,
+                'is_dominant': purity >= 0.8
             }
-        
-        return cluster_info
-    
-    def plot_embeddings_overview(
-        self, 
-        reduction_method: str,
-        color_by: str, 
-        figsize: Tuple[int, int],
-        alpha: float,
-        s: int
-    ):
-        """
-        Genera visualización general de embeddings en espacio 2D.
-        
-        Aplica reducción de dimensionalidad y crea gráficos comparativos
-        mostrando tanto clusters identificados como etiquetas verdaderas.
-        
-        Args:
-            reduction_method: Método de reducción ('tsne', 'pca', 'umap')
-            color_by: Criterio de coloreo ('cluster', 'true', 'both')
-            figsize: Tamaño de la figura (ancho, alto)
-            alpha: Transparencia de los puntos
-            s: Tamaño de los puntos
-        """
-        # Configuración adaptativa del reductor
-        n_samples = len(self.embeddings)
-        
-        if reduction_method == 'tsne':
-            if n_samples < 4:
-                logging.warning("Dataset muy pequeño, usando PCA en su lugar")
-                reducer = PCA(n_components=2, random_state=self.seed)
-            else:
-                perplexity = max(5, min(50, n_samples // 8))  # Perplexity adaptativa
-                reducer = TSNE(
-                    n_components=2, 
-                    random_state=self.seed, 
-                    perplexity=perplexity,
-                    n_iter=1000,  # Más iteraciones para convergencia
-                    learning_rate='auto'
-                )
-        elif reduction_method == 'pca':
-            reducer = PCA(n_components=2, random_state=self.seed)
-        elif reduction_method == 'umap':
-            n_neighbors = max(5, min(15, n_samples // 20))  # Neighbors adaptativos
-            reducer = umap.UMAP(
-                n_components=2, 
-                random_state=self.seed,
-                n_neighbors=n_neighbors,
-                min_dist=0.1
-            )
-        else:
-            raise ValueError(f"Método de reducción no soportado: {reduction_method}")
-        
-        # Aplicar reducción de dimensionalidad
-        logging.info(f"Aplicando {reduction_method.upper()} a {n_samples} embeddings...")
-        embeddings_2d = reducer.fit_transform(self.embeddings)
-        
-        # Crear visualización comparativa
-        fig, axes = plt.subplots(1, 2, figsize=figsize)
-        
-        # Gráfico por clusters
-        unique_clusters = np.unique(self.cluster_labels)
-        n_clusters = len(unique_clusters)
-        
-        scatter1 = axes[0].scatter(
-            embeddings_2d[:, 0], embeddings_2d[:, 1],
-            c=self.cluster_labels, 
-            cmap='tab10' if n_clusters <= 10 else 'tab20',
-            alpha=alpha, s=s, edgecolors='black', linewidth=0.5
-        )
-        axes[0].set_title('Coloreado por Etiquetas de Cluster', fontsize=14, fontweight='bold')
-        axes[0].set_xlabel(f'{reduction_method.upper()} Componente 1', fontsize=12)
-        axes[0].set_ylabel(f'{reduction_method.upper()} Componente 2', fontsize=12)
-        axes[0].grid(True, alpha=0.3)
-        
-        # Gráfico por etiquetas verdaderas
-        unique_true = np.unique(self.true_labels)
-        n_true = len(unique_true)
-        
-        scatter2 = axes[1].scatter(
-            embeddings_2d[:, 0], embeddings_2d[:, 1],
-            c=self.true_labels, 
-            cmap='tab20' if n_true <= 20 else 'viridis',
-            alpha=alpha, s=s, edgecolors='black', linewidth=0.5
-        )
-        axes[1].set_title('Coloreado por Etiquetas Verdaderas', fontsize=14, fontweight='bold')
-        axes[1].set_xlabel(f'{reduction_method.upper()} Componente 1', fontsize=12)
-        axes[1].set_ylabel(f'{reduction_method.upper()} Componente 2', fontsize=12)
-        axes[1].grid(True, alpha=0.3)
-        
-        # Añadir información estadística
-        fig.suptitle(f'Visualización de Embeddings - {n_samples} muestras, '
-                    f'{n_clusters} clusters, {n_true} clases verdaderas', 
-                    fontsize=16, fontweight='bold', y=0.98)
-        
-        plt.tight_layout()
-        plt.show()
-        
-        # Limpieza de memoria
-        del reducer
-        gc.collect()
-        
-        return embeddings_2d
-    
-    def get_cluster_summary(self) -> pd.DataFrame:
-        """
-        Genera resumen del análisis de pureza de clusters.
-        
-        Returns:
-            DataFrame con estadísticas completas por cluster
-        """
-        summary_data = []
-        
-        for cluster_id, info in self.cluster_analysis.items():
-            model_name = self.model_names[info['most_common_model']]
-            summary_data.append({
-                'cluster_id': cluster_id,
-                'size': info['size'],
-                'n_unique_models': info['n_unique_models'],
-                'most_common_model': model_name,
-                'purity': info['purity'],
-                'diversity_index': info['diversity_index'],
-                'entropy': info['entropy'],
-                'is_pure': info['is_pure'],
-                'is_dominant': info['is_dominant']
-            })
-        
-        df = pd.DataFrame(summary_data).sort_values('purity', ascending=False)
-        logging.info(f"Generado resumen: {len(df)} clusters analizados")
-        return df
-    
-    def visualize_good_clusters(
-        self, 
-        n_clusters: int, 
-        images_per_cluster: int,
-        figsize_per_cluster: Tuple[int, int]
-    ):
-        """
-        Visualiza los clusters más puros con imágenes representativas.
-        
-        Selecciona automáticamente los clusters con mayor pureza y muestra
-        imágenes representativas de cada uno para análisis visual.
-        
-        Args:
-            n_clusters: Número de clusters a visualizar
-            images_per_cluster: Imágenes por cluster a mostrar
-            figsize_per_cluster: Tamaño de figura por cluster
-        """
-        # Seleccionar clusters de alta calidad (pureza > 0.7 o dominantes)
-        high_quality_clusters = [
-            (cluster_id, info) for cluster_id, info in self.cluster_analysis.items()
-            if info['purity'] >= 0.7 or info['is_dominant']
-        ]
-        
-        # Ordenar por pureza descendente
-        high_quality_clusters.sort(key=lambda x: x[1]['purity'], reverse=True)
-        
-        if len(high_quality_clusters) == 0:
-            logging.warning("No se encontraron clusters de alta calidad!")
-            return
-        
-        # Limitar número de clusters a visualizar
-        n_clusters = min(n_clusters, len(high_quality_clusters))
-        logging.info(f"Visualizando {n_clusters} clusters de mayor pureza")
 
-        # Configurar grid de visualización
-        fig, axes = plt.subplots(n_clusters, 1, 
-                                figsize=(figsize_per_cluster[0], figsize_per_cluster[1] * n_clusters))
-        if n_clusters == 1:
-            axes = [axes]
-        
-        # Visualizar cada cluster seleccionado
-        for i, (cluster_id, cluster_info) in enumerate(high_quality_clusters[:n_clusters]):
-            cluster_mask = self.cluster_labels == cluster_id
-            cluster_indices = np.where(cluster_mask)[0]
-            
-            # Selección diversificada de imágenes
-            n_to_show = min(images_per_cluster, len(cluster_indices))
-            np.random.seed(self.seed + i)  # Semilla consistente por cluster
-            selected_indices = np.random.choice(cluster_indices, n_to_show, replace=False)
-            
-            model_name = self.model_names[cluster_info['most_common_model']]
-            
-            # Título descriptivo con estadísticas
-            title = (f"Cluster {cluster_id} - Modelo: {model_name} | "
-                    f"Tamaño: {cluster_info['size']} | "
-                    f"Pureza: {cluster_info['purity']:.3f}")
-            axes[i].set_title(title, fontsize=14, fontweight='bold')
-            axes[i].axis('off')
-            
-            # Mostrar imágenes representativas del cluster
-            for j, idx in enumerate(selected_indices):
-                try:
-                    sample = self.test_dataset[idx]
-                    images = sample['images']
-                    
-                    # Manejar diferentes formatos de imagen
-                    if isinstance(images, list):
-                        img = images[0]  # Tomar primera imagen si es lista
-                    else:
-                        img = images
-                    
-                    # Conversión y normalización robusta
-                    if hasattr(img, 'numpy'):  # Tensor de PyTorch
-                        img_np = img.permute(1, 2, 0).numpy()
-                        # Desnormalización ImageNet
+        # Mapa: clase -> clusters donde aparece
+        class_cluster_map: Dict[int, Dict[str, Any]] = {}
+        unique_classes = np.unique(self.true_labels)
+        for cls in unique_classes:
+            cls_mask = self.true_labels == cls
+            clusters_for_class = np.unique(self.cluster_labels[cls_mask])
+            clusters_for_class = [int(c) for c in clusters_for_class if int(c) != -1]
+
+            pure_ids = [c for c in clusters_for_class 
+                       if cluster_info.get(c, {}).get('is_pure', False)]
+            mixed_ids = [c for c in clusters_for_class 
+                        if cluster_info.get(c, {}).get('is_mixed', False)]
+
+            class_cluster_map[int(cls)] = {
+                'clusters': clusters_for_class,
+                'n_clusters': len(clusters_for_class),
+                'n_pure_clusters': len(pure_ids),
+                'n_mixed_clusters': len(mixed_ids),
+                'pure_cluster_ids': pure_ids,
+                'mixed_cluster_ids': mixed_ids
+            }
+
+        self.class_cluster_map = class_cluster_map
+
+        n_pure = sum(1 for info in cluster_info.values() if info['is_pure'])
+        n_mixed = sum(1 for info in cluster_info.values() if info['is_mixed'])
+        n_total = len(cluster_info)
+        logging.info(f"Clusters analizados: {n_total} ({n_pure} puros, {n_mixed} mixtos)")
+
+        multi_cluster_classes = {cls: stats for cls, stats in class_cluster_map.items() 
+                                if stats['n_clusters'] > 1}
+        if len(multi_cluster_classes) > 0:
+            logging.info(f"Clases repartidas en múltiples clusters: {len(multi_cluster_classes)}")
+
+        return cluster_info
+
+    def _to_numpy_image(self, img) -> Optional[np.ndarray]:
+        """Convierte diferentes formatos de imagen a numpy en rango [0,1]."""
+        try:
+            if hasattr(img, 'numpy'):
+                if len(img.shape) == 3 and img.shape[0] in [1, 3]:
+                    img_np = img.permute(1, 2, 0).numpy()
+                    if img_np.min() < 0:
                         mean = np.array([0.485, 0.456, 0.406])
                         std = np.array([0.229, 0.224, 0.225])
                         img_np = img_np * std + mean
-                        img_np = np.clip(img_np, 0, 1)
-                    else:  # PIL Image o numpy array
-                        img_np = np.array(img)
-                        if img_np.max() > 1.0:  # Si está en rango [0,255]
-                            img_np = img_np / 255.0
-                    
-                    # Crear subgráfico para imagen
-                    ax_img = plt.subplot2grid(
-                        (n_clusters, images_per_cluster), (i, j),
-                        fig=fig
-                    )
-                    ax_img.imshow(img_np)
-                    ax_img.axis('off')
-                    ax_img.set_title(f'Muestra {j+1}', fontsize=10)
-                    
-                except Exception as img_error:
-                    logging.warning(f"Error procesando imagen {idx}: {img_error}")
+                    img_np = np.clip(img_np, 0, 1)
+                else:
+                    img_np = img.numpy()
+                    if img_np.max() > 1.0:
+                        img_np = img_np / 255.0
+            elif hasattr(img, 'convert'):
+                img_np = np.array(img.convert('RGB'))
+                if img_np.max() > 1.0:
+                    img_np = img_np / 255.0
+            else:
+                img_np = np.array(img)
+                if img_np.max() > 1.0:
+                    img_np = img_np / 255.0
+            
+            if len(img_np.shape) == 3 and img_np.shape[0] in [1, 3] and img_np.shape[0] < img_np.shape[1]:
+                img_np = np.transpose(img_np, (1, 2, 0))
+            
+            return img_np
+        except Exception as e:
+            logging.warning(f"Error convirtiendo imagen: {e}")
+            return None
+
+    def _setup_figure_style(self, fig: plt.Figure):
+        fig.patch.set_facecolor(self._PALETTE['background'])
+
+    def _create_grid_axes(self, fig: plt.Figure, n_rows: int, n_cols: int):
+        gs = plt.GridSpec(n_rows, n_cols, figure=fig, wspace=0.1, hspace=0.1)
+        axes = [[fig.add_subplot(gs[r, c]) for c in range(n_cols)] for r in range(n_rows)]
+        for r in range(n_rows):
+            for c in range(n_cols):
+                axes[r][c].axis('off')
+                axes[r][c].set_aspect('equal')
+        return axes
+
+    def _compute_indices_for_pure_cluster(self, cluster_id: int, max_display: int = 5) -> List[int]:
+        """Para clusters puros: devuelve hasta max_display muestras."""
+        cluster_mask = self.cluster_labels == cluster_id
+        cluster_indices = np.where(cluster_mask)[0]
+        k = len(cluster_indices)
+        if k == 0:
+            return []
+        if k <= max_display:
+            return [int(i) for i in cluster_indices]
+        np.random.seed(self.seed + int(cluster_id))
+        sel = np.random.choice(cluster_indices, max_display, replace=False)
+        return [int(i) for i in sel]
+
+    def _compute_indices_for_mixed_cluster(self, cluster_id: int) -> List[tuple]:
+        """Para clusters mixtos: una muestra por cada modelo distinto."""
+        cluster_mask = self.cluster_labels == cluster_id
+        cluster_indices = np.where(cluster_mask)[0]
+        if len(cluster_indices) == 0:
+            return []
+
+        cluster_true_labels = self.true_labels[cluster_mask]
+        unique_models = np.unique(cluster_true_labels)
+
+        samples: List[tuple] = []
+        for model_label in unique_models:
+            local_positions = np.where(cluster_true_labels == model_label)[0]
+            if len(local_positions) == 0:
+                continue
+            np.random.seed(self.seed + int(model_label) + int(cluster_id))
+            sel_local = int(np.random.choice(local_positions))
+            global_idx = int(cluster_indices[sel_local])
+            samples.append((global_idx, int(model_label)))
+        return samples
+
+    def _plot_clusters_row(self, clusters: List[Tuple[int, Dict[str, Any]]],
+                           indices_per_cluster: List[List[Union[int, tuple]]],
+                           fig_title: str, is_pure: bool = False):
+        """Dibuja una fila de clusters (cada cluster es una columna)."""
+        if len(clusters) == 0:
+            logging.warning("No hay clusters para mostrar")
+            return
+
+        n_cols = len(clusters)
+        n_rows = max(len(lst) for lst in indices_per_cluster) if indices_per_cluster else 0
+        if n_rows == 0:
+            logging.warning("No hay imágenes para mostrar")
+            return
+
+        logging.info(f"Visualizando {n_cols} clusters con máximo {n_rows} imágenes por cluster")
+
+        col_w = 0.5
+        row_h = 0.5
+        figsize = (max(8, n_cols * col_w), max(6, n_rows * row_h + 1.5))
+        fig = plt.figure(figsize=figsize, dpi=100)
+        self._setup_figure_style(fig)
+
+        axes = self._create_grid_axes(fig, n_rows, n_cols)
+
+        # Títulos de cada columna (cluster)
+        for c, (cluster_id, cluster_info) in enumerate(clusters):
+            if is_pure:
+                most_common_label = cluster_info['most_common_model']
+                class_name = self.model_names[most_common_label].replace('_', ' ')
+                title = f"Cluster {cluster_id}: {class_name}"
+            else:
+                title = (f"Cluster {cluster_id} | Tamaño: {cluster_info['size']} | "
+                        f"Pureza: {cluster_info['purity']:.3f}")
+            
+            fig.text((c + 0.5) / n_cols, 0.98, title, ha='center', va='top',
+                    fontsize=10, fontweight='bold', color=self._PALETTE['title'])
+
+        images_loaded = 0
+        total_attempts = 0
+
+        # Dibujar imágenes
+        for c, lst in enumerate(indices_per_cluster):
+            for r in range(n_rows):
+                if r >= len(lst):
                     continue
+                    
+                total_attempts += 1
+                entry = lst[r]
+                try:
+                    if isinstance(entry, tuple):
+                        global_idx, model_label = entry
+                    else:
+                        global_idx = int(entry)
+                        model_label = None
+
+                    sample = self.val_samples[global_idx]
+                    
+                    # Cargar imagen del sample
+                    if isinstance(sample, dict):
+                        images = sample.get('images', None)
+                    elif hasattr(sample, 'images'):
+                        images = sample.images
+                    else:
+                        if isinstance(sample, (tuple, list)) and len(sample) >= 2:
+                            image_paths = sample[1]
+                            if isinstance(image_paths, (list, tuple)) and len(image_paths) > 0:
+                                from PIL import Image
+                                try:
+                                    pil_img = Image.open(image_paths[0]).convert('RGB')
+                                    images = [pil_img]
+                                except Exception as e:
+                                    logging.warning(f"Error cargando desde path: {e}")
+                                    continue
+                            else:
+                                continue
+                        else:
+                            continue
+                    
+                    if images is None:
+                        continue
+                    img = images[0] if isinstance(images, list) else images
+                    img_np = self._to_numpy_image(img)
+                    if img_np is None:
+                        continue
+
+                    # Configurar subtítulos según tipo de cluster
+                    if is_pure:
+                        subtitle = f"Muestra {r+1}"
+                        axes[r][c].imshow(img_np, interpolation='bilinear')
+                        axes[r][c].axis('off')
+                        axes[r][c].text(0.5, -0.05, subtitle, transform=axes[r][c].transAxes,
+                                       ha='center', va='top', fontsize=8,
+                                       color=self._PALETTE['subtitle'])
+                    else:
+                        if model_label is not None:
+                            model_name = self.model_names[model_label].replace('_', ' ')
+                            count = clusters[c][1]['model_distribution'].get(model_label, 0)
+                            percentage = (count / clusters[c][1]['size']) * 100 if clusters[c][1]['size'] > 0 else 0.0
+                            
+                            axes[r][c].imshow(img_np, interpolation='bilinear')
+                            axes[r][c].axis('off')
+                            # Clase arriba
+                            axes[r][c].text(0.5, 1.05, model_name, transform=axes[r][c].transAxes,
+                                          ha='center', va='bottom', fontsize=9, fontweight='bold',
+                                          color=self._PALETTE['title'])
+                            # Info abajo
+                            axes[r][c].text(0.5, -0.05, f"({count} imgs, {percentage:.1f}%)",
+                                          transform=axes[r][c].transAxes, ha='center', va='top',
+                                          fontsize=8, color=self._PALETTE['subtitle'])
+                    
+                    images_loaded += 1
+
+                except Exception as e:
+                    logging.warning(f"Error mostrando imagen para cluster {clusters[c][0]} posicion {r}: {e}")
+                    continue
+
+        logging.info(f"Visualización: {images_loaded}/{total_attempts} imágenes cargadas")
         
-        plt.suptitle(f'Clusters de Alta Pureza - Top {n_clusters}', 
-                    fontsize=16, fontweight='bold', y=0.98)
+        if images_loaded == 0:
+            logging.error("❌ No se pudo cargar ninguna imagen")
+        
+        fig.suptitle(fig_title, fontsize=14, fontweight='bold', y=0.995,
+                    color=self._PALETTE['title'])
         plt.tight_layout()
         plt.show()
-        
-        logging.info(f"Visualización completada para {n_clusters} clusters")
-    
-    def visualize_mixed_clusters(
-        self, 
-        n_clusters: int,
-        max_models_per_cluster: int,
-        figsize_per_cluster: Tuple[int, int]
-    ):
-        """
-        Visualiza clusters mixtos mostrando diversidad de modelos.
-        
-        Selecciona clusters con mayor diversidad y muestra una imagen
-        representativa de cada modelo presente en el cluster.
-        
-        Args:
-            n_clusters: Número de clusters mixtos a visualizar
-            max_models_per_cluster: Máximo de modelos diferentes a mostrar por cluster
-            figsize_per_cluster: Tamaño de figura por cluster
-        """
-        # Seleccionar clusters mixtos con mayor diversidad
+
+    def visualize_good_clusters(self, n_clusters: int, max_classes_per_cluster: int = 8):
+        """Muestra clusters puros en UNA SOLA FILA (cada cluster es una columna)."""
+        pure_clusters = [(cid, info) for cid, info in self.cluster_analysis.items() 
+                        if info['is_pure']]
+        if len(pure_clusters) == 0:
+            logging.warning("No se encontraron clusters puros")
+            return
+
+        pure_clusters.sort(key=lambda x: x[1]['size'], reverse=True)
+        selected = pure_clusters[:max(1, int(n_clusters))]
+
+        indices_per_cluster: List[List[int]] = []
+        for cid, info in selected:
+            inds = self._compute_indices_for_pure_cluster(cid, max_display=5)
+            indices_per_cluster.append(inds)
+
+        self._plot_clusters_row(selected, indices_per_cluster, 
+                               fig_title=f"Clusters Puros - {len(selected)} clusters",
+                               is_pure=True)
+
+    def visualize_mixed_clusters(self, n_clusters: int, max_classes_per_cluster: int = 8):
+        """Muestra clusters mixtos en UNA SOLA FILA (cada cluster es una columna)."""
         mixed_clusters = [
-            (cluster_id, info) for cluster_id, info in self.cluster_analysis.items() 
-            if not info['is_pure'] and info['n_unique_models'] > 1
+            (cid, info) for cid, info in self.cluster_analysis.items() 
+            if info['is_mixed'] and info['n_unique_models'] <= max_classes_per_cluster
         ]
-        
-        # Ordenar por diversidad (número de modelos únicos)
-        mixed_clusters.sort(key=lambda x: x[1]['n_unique_models'], reverse=True)
         
         if len(mixed_clusters) == 0:
-            logging.warning("No se encontraron clusters mixtos!")
+            all_mixed = [(cid, info) for cid, info in self.cluster_analysis.items() 
+                        if info['is_mixed']]
+            if len(all_mixed) == 0:
+                logging.warning("No se encontraron clusters mixtos")
+            else:
+                all_mixed.sort(key=lambda x: x[1]['n_unique_models'], reverse=True)
+                max_classes_found = all_mixed[0][1]['n_unique_models'] if all_mixed else 0
+                logging.warning(
+                    f"No hay clusters mixtos con ≤{max_classes_per_cluster} clases. "
+                    f"El cluster con menos clases tiene {max_classes_found} clases.")
             return
-        
-        # Limitar número de clusters a visualizar
-        n_clusters = min(n_clusters, len(mixed_clusters))
-        logging.info(f"Visualizando {n_clusters} clusters mixtos más diversos")
 
-        # Configurar grid de visualización
-        fig, axes = plt.subplots(n_clusters, 1, 
-                                figsize=(figsize_per_cluster[0], figsize_per_cluster[1] * n_clusters))
-        if n_clusters == 1:
-            axes = [axes]
+        mixed_clusters.sort(key=lambda x: x[1]['n_unique_models'], reverse=True)
+        selected = mixed_clusters[:max(1, int(n_clusters))]
+
+        indices_per_cluster: List[List[tuple]] = []
+        for cid, info in selected:
+            samples = self._compute_indices_for_mixed_cluster(cid)
+            indices_per_cluster.append(samples)
+
+        self._plot_clusters_row(selected, indices_per_cluster, 
+                               fig_title=f"Clusters Mixtos - {len(selected)} clusters",
+                               is_pure=False)
+
+    def visualize_best_available_clusters(self, n_clusters: int = 3, 
+                                         max_classes_per_cluster: int = 8):
+        """Estrategia adaptativa: prioriza clusters puros, luego mixtos viables."""
+        pure_clusters = [(cid, info) for cid, info in self.cluster_analysis.items() 
+                        if info['is_pure']]
+        mixed_clusters = [(cid, info) for cid, info in self.cluster_analysis.items() 
+                         if info['is_mixed']]
+        viable_mixed = [
+            (cid, info) for cid, info in mixed_clusters 
+            if info['n_unique_models'] <= max_classes_per_cluster
+        ]
         
-        # Procesar cada cluster mixto seleccionado
-        for i, (cluster_id, cluster_info) in enumerate(mixed_clusters[:n_clusters]):
-            cluster_mask = self.cluster_labels == cluster_id
-            cluster_indices = np.where(cluster_mask)[0]
-            cluster_true_labels = self.true_labels[cluster_mask]
-            
-            # Obtener modelos únicos en el cluster
-            unique_models = np.unique(cluster_true_labels)
-            models_to_show = unique_models[:max_models_per_cluster]
-            
-            # Título descriptivo con estadísticas
-            title = (f"Cluster Mixto {cluster_id} - {len(unique_models)} modelos | "
-                    f"Tamaño: {cluster_info['size']} | "
-                    f"Pureza: {cluster_info['purity']:.3f} | "
-                    f"Entropía: {cluster_info['entropy']:.3f}")
-            axes[i].set_title(title, fontsize=12, fontweight='bold')
-            axes[i].axis('off')
-            
-            # Mostrar una imagen representativa por cada modelo
-            for j, model_label in enumerate(models_to_show):
-                # Encontrar índices de este modelo en el cluster
-                model_mask = cluster_true_labels == model_label
-                local_indices = np.where(model_mask)[0]
-                if len(local_indices) == 0:
-                    continue
-                
-                try:
-                    # Seleccionar imagen representativa del modelo
-                    np.random.seed(self.seed + int(model_label))
-                    selected_local_idx = np.random.choice(local_indices)
-                    global_idx = cluster_indices[selected_local_idx]
-                    
-                    sample = self.test_dataset[global_idx]
-                    images = sample['images']
-                    
-                    # Manejar diferentes formatos de imagen
-                    if isinstance(images, list):
-                        img = images[0]  
-                    else:
-                        img = images
-                    
-                    # Conversión y normalización robusta
-                    if hasattr(img, 'numpy'):  # Tensor de PyTorch
-                        img_np = img.permute(1, 2, 0).numpy()
-                        # Desnormalización ImageNet
-                        mean = np.array([0.485, 0.456, 0.406])
-                        std = np.array([0.229, 0.224, 0.225])
-                        img_np = img_np * std + mean
-                        img_np = np.clip(img_np, 0, 1)
-                    else:  # PIL Image o numpy array
-                        img_np = np.array(img)
-                        if img_np.max() > 1.0:
-                            img_np = img_np / 255.0
-                    
-                    # Crear subgráfico para imagen
-                    ax_img = plt.subplot2grid(
-                        (n_clusters, max_models_per_cluster), (i, j),
-                        fig=fig
-                    )
-                    ax_img.imshow(img_np)
-                    ax_img.axis('off')
-                    
-                    # Etiqueta con nombre del modelo y cantidad de imágenes
-                    model_name = self.model_names[model_label]
-                    count = cluster_info['model_distribution'].get(model_label, 0)
-                    percentage = (count / cluster_info['size']) * 100
-                    ax_img.set_title(f'{model_name}\n({count} imgs, {percentage:.1f}%)', 
-                                    fontsize=9, fontweight='bold')
-                    
-                except Exception as img_error:
-                    logging.warning(f"Error procesando imagen para modelo {model_label}: {img_error}")
-                    continue
+        logging.info(f"Clusters disponibles: {len(pure_clusters)} puros, "
+                    f"{len(viable_mixed)}/{len(mixed_clusters)} mixtos viables")
         
-        plt.suptitle(f'Clusters Mixtos - Diversidad de Modelos', 
-                    fontsize=16, fontweight='bold', y=0.98)
-        plt.tight_layout()
-        plt.show()
-        
-        logging.info(f"Visualización completada para {n_clusters} clusters mixtos")
-    
+        if len(pure_clusters) > 0:
+            logging.info(f"Visualizando {min(n_clusters, len(pure_clusters))} clusters puros")
+            self.visualize_good_clusters(n_clusters, max_classes_per_cluster)
+        elif len(viable_mixed) > 0:
+            logging.info(f"Visualizando {min(n_clusters, len(viable_mixed))} clusters mixtos")
+            self.visualize_mixed_clusters(n_clusters, max_classes_per_cluster)
+        else:
+            if len(mixed_clusters) > 0:
+                mixed_clusters.sort(key=lambda x: x[1]['n_unique_models'])
+                min_classes = mixed_clusters[0][1]['n_unique_models']
+                logging.warning(
+                    f"❌ No se puede visualizar: todos los clusters tienen >{max_classes_per_cluster} clases. "
+                    f"Mínimo encontrado: {min_classes} clases.")
+            else:
+                logging.warning("❌ No hay clusters válidos para visualizar")
+
     def print_cluster_statistics(self):
-        """
-        Imprime estadísticas generales sobre la calidad del clustering.
-        
-        Genera un resumen completo de métricas de pureza, diversidad
-        y distribución de clusters para análisis cuantitativo.
-        """
-        # Estadísticas básicas
+        """Imprime estadísticas generales del clustering."""
         total_clusters = len(self.cluster_analysis)
         if total_clusters == 0:
             logging.warning("No hay clusters para analizar")
             return
-            
+
         pure_clusters = sum(1 for info in self.cluster_analysis.values() if info['is_pure'])
         dominant_clusters = sum(1 for info in self.cluster_analysis.values() if info['is_dominant'])
-        mixed_clusters = total_clusters - pure_clusters
-        
-        # Estadísticas de pureza
+        mixed_clusters = sum(1 for info in self.cluster_analysis.values() if info['is_mixed'])
+
         purities = [info['purity'] for info in self.cluster_analysis.values()]
         entropies = [info['entropy'] for info in self.cluster_analysis.values()]
         sizes = [info['size'] for info in self.cluster_analysis.values()]
-        
-        # Reporte principal
-        logging.info("\n" + "=" * 60)
-        logging.info("               ESTADÍSTICAS DE CLUSTERING")
+
         logging.info("=" * 60)
-        logging.info(f"Total de clusters:        {total_clusters}")
-        logging.info(f"Clusters puros:          {pure_clusters} ({pure_clusters/total_clusters*100:.1f}%)")
-        logging.info(f"Clusters dominantes:     {dominant_clusters} ({dominant_clusters/total_clusters*100:.1f}%)")
-        logging.info(f"Clusters mixtos:         {mixed_clusters} ({mixed_clusters/total_clusters*100:.1f}%)")
-        
-        # Métricas de calidad
-        logging.info(f"\nMÉTRICAS DE CALIDAD:")
-        logging.info(f"Pureza promedio:         {np.mean(purities):.3f} ± {np.std(purities):.3f}")
-        logging.info(f"Entropía promedio:       {np.mean(entropies):.3f} ± {np.std(entropies):.3f}")
-        logging.info(f"Tamaño promedio:         {np.mean(sizes):.1f} ± {np.std(sizes):.1f}")
-        
-        # Análisis de clusters mixtos
-        if mixed_clusters > 0:
-            mixed_models = [
-                info['n_unique_models'] for info in self.cluster_analysis.values() 
-                if not info['is_pure']
-            ]
-            logging.info(f"\nANÁLISIS DE CLUSTERS MIXTOS:")
-            logging.info(f"Modelos promedio por cluster mixto: {np.mean(mixed_models):.1f}")
-            logging.info(f"Máximo modelos en cluster mixto:    {max(mixed_models)}")
-            
-            # Top clusters más diversos
-            mixed_info = [
-                (cluster_id, info) for cluster_id, info in self.cluster_analysis.items()
-                if not info['is_pure']
-            ]
-            mixed_info.sort(key=lambda x: x[1]['n_unique_models'], reverse=True)
-            
-            logging.info(f"\nTOP 3 CLUSTERS MÁS DIVERSOS:")
-            for i, (cluster_id, info) in enumerate(mixed_info[:3]):
-                logging.info(f"  {i+1}. Cluster {cluster_id}: {info['n_unique_models']} modelos, "
-                           f"Pureza: {info['purity']:.3f}, Tamaño: {info['size']}")
-        
-        # Distribución de tamaños
-        logging.info(f"\nDISTRIBUCIÓN DE TAMAÑOS:")
-        logging.info(f"Cluster más pequeño:     {min(sizes)}")
-        logging.info(f"Cluster más grande:      {max(sizes)}")
-        logging.info(f"Mediana de tamaño:       {np.median(sizes):.1f}")
-        
+        logging.info("ESTADÍSTICAS DE CLUSTERING")
         logging.info("=" * 60)
+        logging.info(f"Total de clusters: {total_clusters}")
+        logging.info(f"Clusters puros: {pure_clusters} ({pure_clusters/total_clusters*100:.1f}%)")
+        logging.info(f"Clusters dominantes: {dominant_clusters} ({dominant_clusters/total_clusters*100:.1f}%)")
+        logging.info(f"Clusters mixtos: {mixed_clusters} ({mixed_clusters/total_clusters*100:.1f}%)")
+        logging.info(f"Pureza promedio: {np.mean(purities):.3f} ± {np.std(purities):.3f}")
+        logging.info(f"Entropía promedio: {np.mean(entropies):.3f} ± {np.std(entropies):.3f}")
+        logging.info(f"Tamaño promedio: {np.mean(sizes):.1f} ± {np.std(sizes):.1f}")
+        logging.info("=" * 60)
+
+    def get_class_cluster_overlap(self) -> pd.DataFrame:
+        """Devuelve clases que aparecen en más de un cluster."""
+        rows = []
+        for cls, stats in self.class_cluster_map.items():
+            if stats['n_clusters'] <= 1:
+                continue
+            name = (self.label_encoder.classes_[int(cls)] 
+                   if hasattr(self.label_encoder, 'classes_') else str(cls))
+            rows.append({
+                'class_id': int(cls),
+                'class_name': name,
+                'n_clusters': stats['n_clusters'],
+                'n_pure_clusters': stats['n_pure_clusters'],
+                'n_mixed_clusters': stats['n_mixed_clusters'],
+                'cluster_ids': stats['clusters']
+            })
+        df = pd.DataFrame(rows).sort_values('n_clusters', ascending=False)
+        return df

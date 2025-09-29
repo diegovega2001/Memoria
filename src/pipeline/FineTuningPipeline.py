@@ -49,7 +49,7 @@ class FineTuningPipeline:
     Attributes:
         config: Configuración del pipeline.
         df: DataFrame con datos del dataset.
-        dataset_dict: Diccionario con dataset, dataloaders y test sampler.
+        dataset_dict: Diccionario con dataset, dataloaders y los sampler.
         model: Modelo de visión para fine-tuning.
         results: Diccionario con resultados del entrenamiento.
         
@@ -146,7 +146,7 @@ class FineTuningPipeline:
         
         logging.info("Extrayendo embeddings baseline...")
         
-        baseline_embeddings = self.model.extract_test_embeddings()
+        baseline_embeddings = self.model.extract_val_embeddings()
         baseline_eval = self.model.evaluate()
         
         # Guardar resultados baseline
@@ -227,7 +227,7 @@ class FineTuningPipeline:
         
         logging.info("Extrayendo embeddings post fine-tuning...")
         
-        finetuned_embeddings = self.model.extract_test_embeddings()
+        finetuned_embeddings = self.model.extract_val_embeddings()
         finetuned_eval = self.model.evaluate()
         
         # Guardar resultados post fine-tuning
@@ -382,7 +382,7 @@ class FineTuningPipeline:
         return (
             f"FineTuningPipeline("
             f"experiment={self.experiment_name}, "
-            f"dataset={'✓' if self.dataset else '✗'}, "
+            f"dataset={'✓' if self.dataset_dict else '✗'}, "
             f"model={'✓' if self.model else '✗'})"
         )
 

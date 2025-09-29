@@ -333,6 +333,22 @@ class MultiViewVisionModel(nn.Module):
         except Exception as e:
             raise VisionModelError(f"Error extrayendo embeddings: {e}") from e
 
+    def extract_val_embeddings(self, apply_scaling: bool = True) -> torch.Tensor:
+        """
+        Extrae embeddings del conjunto de validación.
+
+        Args:
+            apply_scaling: Si aplicar escalado a los embeddings.
+
+        Returns:
+            Embeddings del conjunto de validación.
+        """
+        return self.extract_embeddings(
+            self.val_loader, 
+            apply_scaling=apply_scaling,
+            show_progress=True
+        )
+    
     def extract_test_embeddings(self, apply_scaling: bool = True) -> torch.Tensor:
         """
         Extrae embeddings del conjunto de prueba.
@@ -540,13 +556,13 @@ class MultiViewVisionModel(nn.Module):
         Evalúa el modelo en un conjunto de datos.
 
         Args:
-            dataloader: DataLoader a evaluar. Si None, usa test_loader.
+            dataloader: DataLoader a evaluar. Si None, usa val_loader.
 
         Returns:
             Diccionario con métricas de evaluación.
         """
         if dataloader is None:
-            dataloader = self.test_loader
+            dataloader = self.val_loader
 
         self.model.eval()
         self.classification_layer.eval()
@@ -575,7 +591,9 @@ class MultiViewVisionModel(nn.Module):
                 all_predictions.extend(predicted.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
 
-        accuracy = 100 * correct / total_samples
+        # Calculo del accuracy manejando 0 predicciones correctas
+        eps = 1e-10
+        accuracy = max(100 * correct / total_samples, eps) if total_samples > 0 else eps
         
         return {
             'accuracy': accuracy,
@@ -585,13 +603,12 @@ class MultiViewVisionModel(nn.Module):
             'labels': all_labels
         }
 
-    def save_model(self, save_path: Union[str, Path], include_optimizer: bool = False, **kwargs) -> None:
+    def save_model(self, save_path: Union[str, Path], **kwargs) -> None:
         """
         Guarda el modelo completo.
 
         Args:
             save_path: Directorio donde guardar el modelo.
-            include_optimizer: Si incluir estado del optimizador.
             **kwargs: Metadatos adicionales a guardar.
         """
         save_path = Path(save_path)
