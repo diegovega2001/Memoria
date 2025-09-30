@@ -11,17 +11,16 @@ Correcciones implementadas:
 
 from __future__ import annotations
 
-import gc
+from pathlib import Path
+import textwrap
+from typing import Any, Dict, List, Optional, Tuple, Union
 import logging
 import warnings
-from typing import Any, Dict, List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import umap
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
+from matplotlib import image as mpimg
 
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
@@ -31,11 +30,13 @@ class ClusterVisualizer:
     """Visualizador avanzado de resultados de clustering."""
 
     _PALETTE = {
-        'background': '#F5F5F5',
-        'line': '#E6E6E6',
-        'title': '#171B21',
-        'axes_text': '#313131',
-        'subtitle': '#4F4F4F'
+        'color_principal': '#2150E0',
+        'color_secundario': ['#4C6DE2', '#90A7F3'],
+        'fondo': '#F5F5F5',
+        'linea': '#E6E6E6',
+        'titulo': '#171B21', # Título y leyenda
+        'ejes': '#313131', # Textos o números
+        'subtitulo': '#4F4F4F'
     }
 
     def __init__(self, embeddings: np.ndarray, cluster_labels: np.ndarray,
@@ -138,6 +139,30 @@ class ClusterVisualizer:
 
         return cluster_info
 
+    def _get_cluster_legend_text(self, cluster_info: Dict[str, Any], all_indices: List[int], is_pure: bool) -> str:
+        """Generar texto de leyenda para un cluster como en el standalone."""
+        if is_pure:
+            model_label = cluster_info['most_common_model']
+            model_name = self.model_names[model_label].replace('_', ' ')
+            count = len(all_indices)
+            return f"{model_name} - {count} imágenes"
+        else:
+            # Para clusters mixtos, usar la distribución de modelos
+            model_dist = cluster_info.get('model_distribution', {})
+            if not model_dist:
+                return f"Cluster mixto - {len(all_indices)} imágenes"
+            
+            model_names = []
+            counts = []
+            for model_label, count in model_dist.items():
+                model_name = self.model_names[model_label].replace('_', ' ')
+                model_names.append(model_name)
+                counts.append(str(count))
+            
+            models_str = ", ".join(model_names)
+            counts_str = ", ".join(counts)
+            return f"{models_str} - {counts_str} imágenes"
+
     def _to_numpy_image(self, img) -> Optional[np.ndarray]:
         """Convierte diferentes formatos de imagen a numpy en rango [0,1]."""
         try:
@@ -170,16 +195,34 @@ class ClusterVisualizer:
             logging.warning(f"Error convirtiendo imagen: {e}")
             return None
 
+    def _load_image_from_path(self, image_path: str) -> Optional[np.ndarray]:
+        """Cargar imagen desde path como en el standalone."""
+        try:
+            img_path = Path(image_path)
+            if not img_path.is_absolute():
+                # Asumir que el path es relativo al directorio del dataset
+                base_path = Path("/Users/diegovega/Documents/Memoria/CompCars")
+                img_path = base_path / image_path
+            
+            img = mpimg.imread(img_path)
+            return img
+        except Exception as e:
+            logging.warning(f"Error cargando imagen desde {image_path}: {e}")
+            return None
+
     def _setup_figure_style(self, fig: plt.Figure):
-        fig.patch.set_facecolor(self._PALETTE['background'])
+        """Aplicar estilo de la paleta a la figura."""
+        fig.patch.set_facecolor(self._PALETTE['fondo'])
 
     def _create_grid_axes(self, fig: plt.Figure, n_rows: int, n_cols: int):
-        gs = plt.GridSpec(n_rows, n_cols, figure=fig, wspace=0.1, hspace=0.1)
+        """Crear grid de ejes con layout horizontal como en el standalone."""
+        gs = plt.GridSpec(n_rows, n_cols, figure=fig, 
+                         wspace=0.05, hspace=0.25,  # espacio horizontal y vertical
+                         left=0.05, right=0.72, top=0.92, bottom=0.05)  # márgenes
         axes = [[fig.add_subplot(gs[r, c]) for c in range(n_cols)] for r in range(n_rows)]
         for r in range(n_rows):
             for c in range(n_cols):
-                axes[r][c].axis('off')
-                axes[r][c].set_aspect('equal')
+                axes[r][c].axis('off')  # desactivar ejes para imagen
         return axes
 
     def _compute_indices_for_pure_cluster(self, cluster_id: int, max_display: int = 5) -> List[int]:
@@ -218,52 +261,40 @@ class ClusterVisualizer:
 
     def _plot_clusters_row(self, clusters: List[Tuple[int, Dict[str, Any]]],
                            indices_per_cluster: List[List[Union[int, tuple]]],
+                           all_indices_per_cluster: List[List[int]],
                            fig_title: str, is_pure: bool = False):
-        """Dibuja una fila de clusters (cada cluster es una columna)."""
+        """Dibuja clusters en layout horizontal como en el standalone (clusters como filas)."""
         if len(clusters) == 0:
             logging.warning("No hay clusters para mostrar")
             return
 
-        n_cols = len(clusters)
-        n_rows = max(len(lst) for lst in indices_per_cluster) if indices_per_cluster else 0
-        if n_rows == 0:
+        n_rows = len(clusters)  # Cada cluster es una fila
+        n_cols = max(len(lst) for lst in indices_per_cluster) if indices_per_cluster else 0
+        if n_cols == 0:
             logging.warning("No hay imágenes para mostrar")
             return
 
-        logging.info(f"Visualizando {n_cols} clusters con máximo {n_rows} imágenes por cluster")
+        logging.info(f"Visualizando {n_rows} clusters con hasta {n_cols} imágenes cada uno")
 
-        col_w = 0.5
-        row_h = 0.5
-        figsize = (max(8, n_cols * col_w), max(6, n_rows * row_h + 1.5))
-        fig = plt.figure(figsize=figsize, dpi=100)
-        self._setup_figure_style(fig)
-
+        # Ajuste dinámico del tamaño de la figura según número de imágenes
+        fig_width = max(14, n_cols * 2.2)
+        fig_height = max(8, n_rows * 1.8)
+        
+        fig = plt.figure(figsize=(fig_width, fig_height), dpi=100)
+        fig.patch.set_facecolor(self._PALETTE['fondo'])  # Fondo de figura
         axes = self._create_grid_axes(fig, n_rows, n_cols)
 
-        # Títulos de cada columna (cluster)
-        for c, (cluster_id, cluster_info) in enumerate(clusters):
-            if is_pure:
-                most_common_label = cluster_info['most_common_model']
-                class_name = self.model_names[most_common_label].replace('_', ' ')
-                title = f"Cluster {cluster_id}: {class_name}"
-            else:
-                title = (f"Cluster {cluster_id} | Tamaño: {cluster_info['size']} | "
-                        f"Pureza: {cluster_info['purity']:.3f}")
-            
-            fig.text((c + 0.5) / n_cols, 0.98, title, ha='center', va='top',
-                    fontsize=10, fontweight='bold', color=self._PALETTE['title'])
+        # Título general de la figura
+        fig.suptitle(fig_title, fontsize=18, fontweight='bold', y=0.97, 
+                    color=self._PALETTE['titulo'])
 
+        # Dibujar imágenes cluster por cluster
         images_loaded = 0
         total_attempts = 0
-
-        # Dibujar imágenes
-        for c, lst in enumerate(indices_per_cluster):
-            for r in range(n_rows):
-                if r >= len(lst):
-                    continue
-                    
+        
+        for r, (cid, info) in enumerate(clusters):
+            for c, entry in enumerate(indices_per_cluster[r]):
                 total_attempts += 1
-                entry = lst[r]
                 try:
                     if isinstance(entry, tuple):
                         global_idx, model_label = entry
@@ -271,79 +302,113 @@ class ClusterVisualizer:
                         global_idx = int(entry)
                         model_label = None
 
-                    sample = self.val_samples[global_idx]
+                    # Intentar cargar imagen del sample
+                    img_np = None
                     
-                    # Cargar imagen del sample
-                    if isinstance(sample, dict):
-                        images = sample.get('images', None)
-                    elif hasattr(sample, 'images'):
-                        images = sample.images
-                    else:
-                        if isinstance(sample, (tuple, list)) and len(sample) >= 2:
-                            image_paths = sample[1]
-                            if isinstance(image_paths, (list, tuple)) and len(image_paths) > 0:
-                                from PIL import Image
-                                try:
-                                    pil_img = Image.open(image_paths[0]).convert('RGB')
-                                    images = [pil_img]
-                                except Exception as e:
-                                    logging.warning(f"Error cargando desde path: {e}")
-                                    continue
-                            else:
-                                continue
+                    # Método 1: Desde val_samples (formato complejo)
+                    try:
+                        sample = self.val_samples[global_idx]
+                        
+                        if isinstance(sample, dict):
+                            images = sample.get('images', None)
+                        elif hasattr(sample, 'images'):
+                            images = sample.images
                         else:
-                            continue
+                            # Formato tuple/list con paths
+                            if isinstance(sample, (tuple, list)) and len(sample) >= 2:
+                                image_paths = sample[1]
+                                if isinstance(image_paths, (list, tuple)) and len(image_paths) > 0:
+                                    img_np = self._load_image_from_path(image_paths[0])
+                                elif isinstance(image_paths, str):
+                                    img_np = self._load_image_from_path(image_paths)
+                        
+                        if img_np is None and 'images' in locals():
+                            if images is not None:
+                                img = images[0] if isinstance(images, list) else images
+                                img_np = self._to_numpy_image(img)
+                    except Exception as e:
+                        logging.debug(f"Error con método val_samples: {e}")
                     
-                    if images is None:
-                        continue
-                    img = images[0] if isinstance(images, list) else images
-                    img_np = self._to_numpy_image(img)
+                    # Si falló, mostrar X
                     if img_np is None:
-                        continue
-
-                    # Configurar subtítulos según tipo de cluster
-                    if is_pure:
-                        subtitle = f"Muestra {r+1}"
-                        axes[r][c].imshow(img_np, interpolation='bilinear')
-                        axes[r][c].axis('off')
-                        axes[r][c].text(0.5, -0.05, subtitle, transform=axes[r][c].transAxes,
-                                       ha='center', va='top', fontsize=8,
-                                       color=self._PALETTE['subtitle'])
+                        axes[r][c].text(0.5, 0.5, "X", ha="center", va="center", 
+                                       fontsize=20, color='red')
+                        axes[r][c].set_xlim([0, 1])
+                        axes[r][c].set_ylim([0, 1])
                     else:
-                        if model_label is not None:
-                            model_name = self.model_names[model_label].replace('_', ' ')
-                            count = clusters[c][1]['model_distribution'].get(model_label, 0)
-                            percentage = (count / clusters[c][1]['size']) * 100 if clusters[c][1]['size'] > 0 else 0.0
-                            
-                            axes[r][c].imshow(img_np, interpolation='bilinear')
-                            axes[r][c].axis('off')
-                            # Clase arriba
-                            axes[r][c].text(0.5, 1.05, model_name, transform=axes[r][c].transAxes,
-                                          ha='center', va='bottom', fontsize=9, fontweight='bold',
-                                          color=self._PALETTE['title'])
-                            # Info abajo
-                            axes[r][c].text(0.5, -0.05, f"({count} imgs, {percentage:.1f}%)",
-                                          transform=axes[r][c].transAxes, ha='center', va='top',
-                                          fontsize=8, color=self._PALETTE['subtitle'])
-                    
-                    images_loaded += 1
+                        axes[r][c].imshow(img_np)
+                        images_loaded += 1
+                        
+                        # Bordes sutiles alrededor de cada imagen
+                        for spine in axes[r][c].spines.values():
+                            spine.set_visible(True)
+                            spine.set_edgecolor(self._PALETTE['linea'])
+                            spine.set_linewidth(0.5)
 
                 except Exception as e:
-                    logging.warning(f"Error mostrando imagen para cluster {clusters[c][0]} posicion {r}: {e}")
-                    continue
+                    logging.warning(f"Error mostrando imagen para cluster {cid} posicion {c}: {e}")
+                    axes[r][c].text(0.5, 0.5, "X", ha="center", va="center", 
+                                   fontsize=20, color='red')
 
+        # Líneas separadoras entre filas de imágenes
+        for r in range(n_rows - 1):
+            y_pos = 0.92 - ((r + 1) * (0.87 / n_rows))
+            line = plt.Line2D([0.05, 0.72], [y_pos, y_pos],
+                            transform=fig.transFigure, 
+                            color=self._PALETTE['linea'], linewidth=1.5, linestyle='--', alpha=0.7, zorder=3)
+            fig.add_artist(line)
+
+        # Rectángulo contenedor de la leyenda
+        legend_box = plt.Rectangle((0.74, 0.05), 0.24, 0.87,  # x, y, width, height
+                                   fill=True, facecolor='white',
+                                   edgecolor=self._PALETTE['titulo'], linewidth=2,
+                                   transform=fig.transFigure, zorder=1)
+        fig.patches.append(legend_box)
+
+        # Título de la leyenda
+        title_y = 0.94
+        fig.text(0.86, title_y, 'INFORMACIÓN DE CLUSTERS',
+                fontsize=11, fontweight='bold', va='center', ha='center',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor=self._PALETTE['color_secundario'][0], 
+                          edgecolor=self._PALETTE['titulo'], linewidth=1.5),
+                color=self._PALETTE['titulo'],
+                transform=fig.transFigure,
+                zorder=2)
+
+        # Configuración del texto de los clusters
+        text_x = 0.755
+        max_chars_per_line = 28
+        wrapper = textwrap.TextWrapper(width=max_chars_per_line)
+
+        # Altura de la primera fila de imágenes y altura aproximada de cada fila
+        top_image_y = 0.9
+        row_height = 0.9 / n_rows
+
+        for r, (cid, info) in enumerate(clusters):
+            legend_text = self._get_cluster_legend_text(info, all_indices_per_cluster[r], is_pure)
+            y_pos = top_image_y - (r * row_height)
+
+            # Header del cluster
+            fig.text(text_x, y_pos, f"Cluster {cid}:",
+                    fontsize=9, fontweight='bold', va='top', ha='left',
+                    color=self._PALETTE['titulo'],
+                    transform=fig.transFigure,
+                    zorder=2)
+
+            # Texto del cluster con saltos de línea automáticos
+            wrapped_text = "\n".join(wrapper.wrap(legend_text))
+            fig.text(text_x, y_pos - 0.02, wrapped_text,
+                    fontsize=8, va='top', ha='left',
+                    color=self._PALETTE['ejes'],
+                    transform=fig.transFigure,
+                    zorder=2)
+        
         logging.info(f"Visualización: {images_loaded}/{total_attempts} imágenes cargadas")
-        
-        if images_loaded == 0:
-            logging.error("❌ No se pudo cargar ninguna imagen")
-        
-        fig.suptitle(fig_title, fontsize=14, fontweight='bold', y=0.995,
-                    color=self._PALETTE['title'])
         plt.tight_layout()
         plt.show()
 
     def visualize_good_clusters(self, n_clusters: int, max_classes_per_cluster: int = 8):
-        """Muestra clusters puros en UNA SOLA FILA (cada cluster es una columna)."""
+        """Muestra clusters puros en layout horizontal (cada cluster es una fila)."""
         pure_clusters = [(cid, info) for cid, info in self.cluster_analysis.items() 
                         if info['is_pure']]
         if len(pure_clusters) == 0:
@@ -354,16 +419,21 @@ class ClusterVisualizer:
         selected = pure_clusters[:max(1, int(n_clusters))]
 
         indices_per_cluster: List[List[int]] = []
+        all_indices_per_cluster: List[List[int]] = []
+        
         for cid, info in selected:
-            inds = self._compute_indices_for_pure_cluster(cid, max_display=5)
-            indices_per_cluster.append(inds)
+            display_inds = self._compute_indices_for_pure_cluster(cid, max_display=5)
+            all_inds = np.where(self.cluster_labels == cid)[0].tolist()
+            
+            indices_per_cluster.append(display_inds)
+            all_indices_per_cluster.append(all_inds)
 
-        self._plot_clusters_row(selected, indices_per_cluster, 
-                               fig_title=f"Clusters Puros - {len(selected)} clusters",
+        self._plot_clusters_row(selected, indices_per_cluster, all_indices_per_cluster,
+                               fig_title="Clusters Puros",
                                is_pure=True)
 
     def visualize_mixed_clusters(self, n_clusters: int, max_classes_per_cluster: int = 8):
-        """Muestra clusters mixtos en UNA SOLA FILA (cada cluster es una columna)."""
+        """Muestra clusters mixtos en layout horizontal (cada cluster es una fila)."""
         mixed_clusters = [
             (cid, info) for cid, info in self.cluster_analysis.items() 
             if info['is_mixed'] and info['n_unique_models'] <= max_classes_per_cluster
@@ -386,12 +456,17 @@ class ClusterVisualizer:
         selected = mixed_clusters[:max(1, int(n_clusters))]
 
         indices_per_cluster: List[List[tuple]] = []
+        all_indices_per_cluster: List[List[int]] = []
+        
         for cid, info in selected:
             samples = self._compute_indices_for_mixed_cluster(cid)
+            all_inds = np.where(self.cluster_labels == cid)[0].tolist()
+            
             indices_per_cluster.append(samples)
+            all_indices_per_cluster.append(all_inds)
 
-        self._plot_clusters_row(selected, indices_per_cluster, 
-                               fig_title=f"Clusters Mixtos - {len(selected)} clusters",
+        self._plot_clusters_row(selected, indices_per_cluster, all_indices_per_cluster,
+                               fig_title="Clusters Mixtos",
                                is_pure=False)
 
     def visualize_best_available_clusters(self, n_clusters: int = 3, 
