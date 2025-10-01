@@ -218,23 +218,29 @@ class TransformConfig:
                 logging.warning(f"Error convirtiendo coordenadas de bbox {bbox}: {e}, usando imagen completa")
                 return image
             
-            # Validar orden de coordenadas
-            if x_min >= x_max or y_min >= y_max:
-                logging.warning(f"Bbox con coordenadas inválidas (min >= max): {bbox}, usando imagen completa")
-                return image
-            
-            # Asegurar que las coordenadas estén dentro de la imagen
+            # Asegurar que las coordenadas estén dentro de la imagen ANTES de validar orden
             try:
                 img_width, img_height = image.size
             except AttributeError:
                 logging.warning(f"Imagen no tiene atributo 'size', tipo: {type(image)}, usando imagen completa")
                 return image
             
-            # Convertir a enteros y ajustar límites
-            x_min = int(max(0, min(x_min, img_width - 1)))
-            y_min = int(max(0, min(y_min, img_height - 1)))
-            x_max = int(max(x_min + 1, min(x_max, img_width)))
-            y_max = int(max(y_min + 1, min(y_max, img_height)))
+            # Ajustar coordenadas a límites de la imagen
+            x_min = max(0, min(x_min, img_width - 1))
+            y_min = max(0, min(y_min, img_height - 1))
+            x_max = max(x_min + 1, min(x_max, img_width))  # Asegurar al menos 1 pixel de ancho
+            y_max = max(y_min + 1, min(y_max, img_height))  # Asegurar al menos 1 pixel de alto
+            
+            # Validar orden de coordenadas DESPUÉS de ajustar
+            if x_min >= x_max or y_min >= y_max:
+                logging.warning(f"Bbox con coordenadas inválidas después de ajustar (min >= max): original={bbox}, ajustado=[{x_min}, {y_min}, {x_max}, {y_max}], usando imagen completa")
+                return image
+            
+            # Convertir a enteros
+            x_min = int(x_min)
+            y_min = int(y_min)
+            x_max = int(x_max)
+            y_max = int(y_max)
             
             # Aplicar crop
             cropped_image = image.crop((x_min, y_min, x_max, y_max))
