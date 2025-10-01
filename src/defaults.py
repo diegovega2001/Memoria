@@ -41,7 +41,7 @@ CAR_TYPE_FILE = 'car_type.mat'
 # Constantes del dataset
 DEFAULT_VIEWS = ['front']
 DEFAULT_SEED = 3
-DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS = 5  
+DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS = 6 
 DEFAULT_P = 8  # Número de clases por batch para contrastive learning
 DEFAULT_K = 4  # Número de muestras por clase en cada batch
 MODEL_TYPES = {'vision', 'textual', 'both'}

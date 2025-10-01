@@ -916,6 +916,7 @@ def create_car_dataset(
     batch_size: int = DEFAULT_BATCH_SIZE,
     num_workers: int = DEFAULT_NUM_WORKERS,
     seed: int = DEFAULT_SEED,
+    use_identity_sampler: bool = False,
     **dataset_kwargs
 ) -> Dict[str, Any]:
     """
@@ -930,9 +931,11 @@ def create_car_dataset(
         train_transform: Transformaciones para train (CON augmentación recomendado).
         val_transform: Transformaciones para val/test (SIN augmentación).
                       Si es None, usa train_transform sin augmentación.
-        batch_size: Tamaño de batch para val y test.
+        batch_size: Tamaño de batch para val y test (también para train si no se usa IdentitySampler).
         num_workers: Número de workers para DataLoaders.
         seed: Semilla para reproducibilidad.
+        use_identity_sampler: Si True, usa IdentitySampler P×K para train (metric learning).
+                             Si False, usa batch_size estándar con shuffle (classification).
         **dataset_kwargs: Argumentos adicionales para CarDataset.
     
     Returns:
@@ -941,7 +944,10 @@ def create_car_dataset(
     Example:
         >>> from src.config.TransformConfig import create_training_transform
         >>> transform = create_training_transform(size=(224, 224), use_bbox=True)
-        >>> dataset_dict = create_car_dataset(df=datafram, views=['front', 'rear'], train_transform=train_transform, val_transform=val_transform)
+        >>> # For classification
+        >>> dataset_dict = create_car_dataset(df=df, use_identity_sampler=False, batch_size=256)
+        >>> # For metric learning
+        >>> dataset_dict = create_car_dataset(df=df, use_identity_sampler=True, P=64, K=4)
     """
     
     # Crear dataset base para obtener samples (sin transform específico aún)
@@ -954,22 +960,36 @@ def create_car_dataset(
         **dataset_kwargs
     )
     
-    # Train loader con IdentitySampler P×K
-    train_sampler = IdentitySampler(base_dataset.train_samples, P=P, K=K, seed=seed)
-    
     # Crear datasets para cada split con transforms específicos
     train_dataset = copy.deepcopy(base_dataset)
     train_dataset.transform = create_standard_transform(augment=True)  # Transform CON augmentación
     train_dataset.verbose = False
     train_dataset.set_split('train')
     
-    train_loader = DataLoader(
-        train_dataset,
-        batch_sampler=train_sampler,
-        num_workers=num_workers,
-        pin_memory=True,
-        collate_fn=robust_collate_fn
-    )
+    # Train loader: condicional según use_identity_sampler
+    if use_identity_sampler:
+        # Metric learning: usar IdentitySampler P×K
+        train_sampler = IdentitySampler(base_dataset.train_samples, P=P, K=K, seed=seed)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_sampler=train_sampler,
+            num_workers=num_workers,
+            pin_memory=True,
+            collate_fn=robust_collate_fn
+        )
+        effective_batch_size = P * K
+    else:
+        # Classification: usar batch_size estándar con shuffle
+        train_sampler = None
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+            collate_fn=robust_collate_fn
+        )
+        effective_batch_size = batch_size
     
     # Val loader
     val_dataset = copy.deepcopy(base_dataset)
@@ -1001,7 +1021,10 @@ def create_car_dataset(
     )
     
     logging.info(f"DataLoaders creados:")
-    logging.info(f"  - Train: {len(train_loader)} batches de tamaño {P}×{K}={P*K}")
+    if use_identity_sampler:
+        logging.info(f"  - Train: {len(train_loader)} batches de tamaño {P}×{K}={effective_batch_size} (IdentitySampler)")
+    else:
+        logging.info(f"  - Train: {len(train_loader)} batches de tamaño {effective_batch_size} (Standard shuffle)")
     logging.info(f"  - Val: {len(val_loader)} batches de tamaño {batch_size}")
     logging.info(f"  - Test: {len(test_loader)} batches de tamaño {batch_size}")
     

@@ -94,6 +94,7 @@ class EmbeddingsPipeline:
             seed=self.config.get('seed', 3),
             transform=transform,
             augment=False,
+            use_identity_sampler=False,  # EmbeddingsPipeline solo necesita labels, no training
             model_type='vision',
             description_include=''
         )

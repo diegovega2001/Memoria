@@ -111,6 +111,10 @@ class FineTuningPipeline:
             augment=False
         )
 
+        # Determinar si usar IdentitySampler según el objetivo
+        objective = self.config.get('objective', DEFAULT_OBJECTIVE)
+        use_identity_sampler = (objective == 'metric_learning')
+        
         self.dataset_dict = create_car_dataset(
             df=self.df,
             views=self.config.get('views', DEFAULT_VIEWS),
@@ -122,9 +126,12 @@ class FineTuningPipeline:
             val_transform=val_transform,
             batch_size=self.config.get('batch_size', DEFAULT_BATCH_SIZE),
             num_workers=self.config.get('num_workers', DEFAULT_NUM_WORKERS),
+            use_identity_sampler=use_identity_sampler,
             model_type=self.config.get('model_type', DEFAULT_MODEL_TYPE),
             description_include=self.config.get('description_include', DEFAULT_DESCRIPTION_INCLUDE)
         )
+        
+        logging.info(f"Dataset creado con objective='{objective}', use_identity_sampler={use_identity_sampler}")
         
         # Guardar estadísticas del dataset
         dataset_stats = self.dataset_dict['dataset'].get_dataset_statistics()

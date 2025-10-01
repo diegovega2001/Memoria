@@ -503,7 +503,11 @@ class MultiViewVisionModel(nn.Module):
                 'val_recall@5': []
             }
 
-            best_val_acc = 0.0
+            # Para metric learning con Triplet/Contrastive, usamos Recall@1 en vez de accuracy
+            use_recall_for_tracking = (self.objective == 'metric_learning' and 
+                                       not isinstance(criterion, ArcFaceLoss))
+            
+            best_val_metric = 0.0
             patience_counter = 0
 
             # Scheduler de warmup si se especifica
@@ -537,33 +541,47 @@ class MultiViewVisionModel(nn.Module):
                 history['val_recall@1'].append(val_recalls[1] if val_recalls else None)
                 history['val_recall@5'].append(val_recalls[5] if val_recalls else None)
 
+                # Determinar métrica de seguimiento según el tipo de entrenamiento
+                if use_recall_for_tracking and val_recalls:
+                    current_metric = val_recalls[1]  # Usar Recall@1
+                    metric_name = 'Recall@1'
+                else:
+                    current_metric = val_accuracy  # Usar accuracy
+                    metric_name = 'Val Acc'
+
                 # Log de progreso
                 log_msg = (
                     f'Epoch {epoch+1}/{epochs} | '
                     f'Train Loss: {train_loss:.4f} | '
-                    f'Val Loss: {val_loss:.4f} | '
-                    f'Val Acc: {val_accuracy:.2f}%'
+                    f'Val Loss: {val_loss:.4f}'
                 )
+                
+                # Solo mostrar accuracy si es significativa (classification o ArcFace)
+                if self.objective == 'classification' or isinstance(criterion, ArcFaceLoss):
+                    log_msg += f' | Val Acc: {val_accuracy:.2f}%'
+                
+                # Mostrar Recall@K para metric learning
                 if val_recalls:
                     log_msg += f" | Recall@1: {val_recalls[1]:.2f}% | Recall@5: {val_recalls[5]:.2f}%"
+                
                 logging.info(log_msg)
 
                 # Guardar mejor modelo
-                if save_best and val_accuracy > best_val_acc:
-                    best_val_acc = val_accuracy
+                if save_best and current_metric > best_val_metric:
+                    best_val_metric = current_metric
                     if checkpoint_dir:
-                        self._save_checkpoint(checkpoint_dir, epoch, val_accuracy, 'best')
+                        self._save_checkpoint(checkpoint_dir, epoch, current_metric, 'best')
 
                 # Early stopping
                 if early_stopping:
-                    if val_accuracy > best_val_acc - early_stop_min_delta:
+                    if current_metric > best_val_metric - early_stop_min_delta:
                         patience_counter = 0
-                        best_val_acc = val_accuracy
+                        best_val_metric = current_metric
                     else:
                         patience_counter += 1
 
                     if patience_counter >= early_stop_patience:
-                        logging.info(f"Early stopping triggered at epoch {epoch+1}")
+                        logging.info(f"Early stopping triggered at epoch {epoch+1} based on {metric_name}")
                         break
 
             logging.info(f"Fine-tuning completado.")
@@ -874,14 +892,17 @@ class MultiViewVisionModel(nn.Module):
                             
                         elif isinstance(criterion, TripletLoss):
                             loss = self._compute_triplet_loss(criterion, projected_embeddings, labels)
-                            # Para triplet/contrastive, accuracy no es muy significativa durante entrenamiento
-                            # Usamos una predicción simple basada en el batch
-                            predicted = labels  # Placeholder, la métrica real es Recall@K
+                            # Para triplet/contrastive, no calculamos accuracy tradicional
+                            # La métrica real es Recall@K que se calcula al final
+                            # Usamos un placeholder que no afecta las métricas finales
+                            predicted = torch.zeros_like(labels)  # Placeholder para no inflar accuracy
 
                         elif isinstance(criterion, ContrastiveLoss):
                             loss = self._compute_contrastive_loss(criterion, projected_embeddings, labels)
-                            # Para triplet/contrastive, accuracy no es muy significativa durante entrenamiento
-                            predicted = labels  # Placeholder, la métrica real es Recall@K
+                            # Para triplet/contrastive, no calculamos accuracy tradicional
+                            # La métrica real es Recall@K que se calcula al final
+                            # Usamos un placeholder que no afecta las métricas finales
+                            predicted = torch.zeros_like(labels)  # Placeholder para no inflar accuracy
                             
                         else:
                             raise VisionModelError(f"Función de pérdida no soportada para metric_learning.")
@@ -903,7 +924,13 @@ class MultiViewVisionModel(nn.Module):
                     pbar.set_postfix({'acc': f'{current_acc:.2f}%'})
 
         avg_loss = total_loss / len(self.val_loader)
-        accuracy = 100 * correct / total_samples
+        
+        # Para metric learning (excepto ArcFace), la accuracy no es significativa
+        # ya que no usamos clasificación directa. La métrica real es Recall@K
+        if self.objective == 'metric_learning' and not isinstance(criterion, ArcFaceLoss):
+            accuracy = 0.0  # No significativa para Triplet/Contrastive
+        else:
+            accuracy = 100 * correct / total_samples
         
         recalls = {}
         if self.objective == 'metric_learning':

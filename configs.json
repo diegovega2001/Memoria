@@ -19,12 +19,12 @@
             "use_early_stopping": true,
             "objective": "classification",
             "finetune_criterion": "CrossEntropyLoss",
-            "finetune_epochs": 30,
-            "finetune_backone_lr": 3e-4,
+            "finetune_epochs": 50,
+            "finetune_backone_lr": 1e-4,
             "finetune_head_lr": 1e-3,
-            "finetune_weight_decay": 1e-4,
-            "patience": 3,
-            "warmup_epochs": 5
+            "finetune_weight_decay": 1e-2,
+            "patience": 7,
+            "warmup_epochs": 3
         },
         "resnet101": {
             "model_name": "resnet101",
@@ -45,12 +45,12 @@
             "use_early_stopping": true,
             "objective": "classification",
             "finetune_criterion": "CrossEntropyLoss",
-            "finetune_epochs": 30,
-            "finetune_backone_lr": 3e-4,
+            "finetune_epochs": 50,
+            "finetune_backone_lr": 5e-5,
             "finetune_head_lr": 1e-3,
-            "finetune_weight_decay": 1e-4,
-            "patience": 3,
-            "warmup_epochs": 5
+            "finetune_weight_decay": 1e-2,
+            "patience": 7,
+            "warmup_epochs": 3
         },
         "vit_b_32": {
             "model_name": "vit_b_32",
@@ -71,12 +71,12 @@
             "use_early_stopping": true,
             "objective": "classification",
             "finetune_criterion": "CrossEntropyLoss",
-            "finetune_epochs": 50,
-            "finetune_backone_lr": 2e-4,
-            "finetune_head_lr": 1e-3,
-            "finetune_weight_decay": 1e-4,
-            "patience": 5,
-            "warmup_epochs": 10
+            "finetune_epochs": 60,
+            "finetune_backone_lr": 5e-5,
+            "finetune_head_lr": 5e-4,
+            "finetune_weight_decay": 5e-2,
+            "patience": 10,
+            "warmup_epochs": 5
         },
         "vit_b_16": {
             "model_name": "vit_b_16",
@@ -97,12 +97,12 @@
             "use_early_stopping": true,
             "objective": "classification",
             "finetune_criterion": "CrossEntropyLoss",
-            "finetune_epochs": 50,
-            "finetune_backone_lr": 2e-4,
-            "finetune_head_lr": 1e-3,
-            "finetune_weight_decay": 1e-4,
-            "patience": 5,
-            "warmup_epochs": 10
+            "finetune_epochs": 60,
+            "finetune_backone_lr": 5e-5,
+            "finetune_head_lr": 5e-4,
+            "finetune_weight_decay": 5e-2,
+            "patience": 10,
+            "warmup_epochs": 5
         }
     },
     "metric_learning": {
@@ -128,12 +128,12 @@
                 "use_early_stopping": true,
                 "objective": "metric_learning",
                 "finetune_criterion": "ArcFaceLoss",
-                "finetune_epochs": 30,
-                "finetune_backone_lr": 3e-4,
-                "finetune_head_lr": 3e-3,
+                "finetune_epochs": 40,
+                "finetune_backone_lr": 1e-4,
+                "finetune_head_lr": 1e-3,
                 "finetune_weight_decay": 1e-4,
-                "patience": 3,
-                "warmup_epochs": 5
+                "patience": 5,
+                "warmup_epochs": 2
             },
             "resnet101": {
                 "model_name": "resnet101",
@@ -156,12 +156,12 @@
                 "use_early_stopping": true,
                 "objective": "metric_learning",
                 "finetune_criterion": "ArcFaceLoss",
-                "finetune_epochs": 30,
-                "finetune_backone_lr": 3e-4,
-                "finetune_head_lr": 3e-3,
+                "finetune_epochs": 40,
+                "finetune_backone_lr": 5e-5,
+                "finetune_head_lr": 1e-3,
                 "finetune_weight_decay": 1e-4,
-                "patience": 3,
-                "warmup_epochs": 5
+                "patience": 5,
+                "warmup_epochs": 2
             },
             "vit_b_32": {
                 "model_name": "vit_b_32",
@@ -185,11 +185,11 @@
                 "objective": "metric_learning",
                 "finetune_criterion": "ArcFaceLoss",
                 "finetune_epochs": 50,
-                "finetune_backone_lr": 2e-4,
-                "finetune_head_lr": 1e-3,
+                "finetune_backone_lr": 5e-5,
+                "finetune_head_lr": 5e-4,
                 "finetune_weight_decay": 1e-4,
-                "patience": 5,
-                "warmup_epochs": 10
+                "patience": 8,
+                "warmup_epochs": 3
             },
             "vit_b_16": {
                 "model_name": "vit_b_16",
@@ -213,11 +213,11 @@
                 "objective": "metric_learning",
                 "finetune_criterion": "ArcFaceLoss",
                 "finetune_epochs": 50,
-                "finetune_backone_lr": 2e-4,
-                "finetune_head_lr": 1e-3,
+                "finetune_backone_lr": 5e-5,
+                "finetune_head_lr": 5e-4,
                 "finetune_weight_decay": 1e-4,
-                "patience": 5,
-                "warmup_epochs": 10
+                "patience": 8,
+                "warmup_epochs": 3
             }
         },
         "ContrastiveLoss": {
@@ -242,12 +242,12 @@
                 "use_early_stopping": true,
                 "objective": "metric_learning",
                 "finetune_criterion": "ContrastiveLoss",
-                "finetune_epochs": 30,
-                "finetune_backone_lr": 5e-4,
-                "finetune_head_lr": 4e-3,
-                "finetune_weight_decay": 1e-4,
-                "patience": 3,
-                "warmup_epochs": 5
+                "finetune_epochs": 60,
+                "finetune_backone_lr": 5e-5,
+                "finetune_head_lr": 1e-3,
+                "finetune_weight_decay": 5e-5,
+                "patience": 8,
+                "warmup_epochs": 3
             },
             "resnet101": {
                 "model_name": "resnet101",
@@ -270,12 +270,12 @@
                 "use_early_stopping": true,
                 "objective": "metric_learning",
                 "finetune_criterion": "ContrastiveLoss",
-                "finetune_epochs": 30,
-                "finetune_backone_lr": 5e-4,
-                "finetune_head_lr": 3e-3,
-                "finetune_weight_decay": 1e-4,
-                "patience": 3,
-                "warmup_epochs": 5
+                "finetune_epochs": 60,
+                "finetune_backone_lr": 3e-5,
+                "finetune_head_lr": 1e-3,
+                "finetune_weight_decay": 5e-5,
+                "patience": 8,
+                "warmup_epochs": 3
             },
             "vit_b_32": {
                 "model_name": "vit_b_32",
@@ -298,15 +298,15 @@
                 "use_early_stopping": true,
                 "objective": "metric_learning",
                 "finetune_criterion": "ContrastiveLoss",
-                "finetune_epochs": 50,
-                "finetune_backone_lr": 2e-4,
-                "finetune_head_lr": 1e-3,
-                "finetune_weight_decay": 1e-4,
-                "patience": 5,
-                "warmup_epochs": 10
+                "finetune_epochs": 70,
+                "finetune_backone_lr": 3e-5,
+                "finetune_head_lr": 5e-4,
+                "finetune_weight_decay": 5e-5,
+                "patience": 10,
+                "warmup_epochs": 5
             },
             "vit_b_16": {
-                "model_name": "vit_b_32",
+                "model_name": "vit_b_16",
                 "weights": "IMAGENET1K_V1",
                 "device": "cuda",
                 "batch_size": 128,
@@ -326,12 +326,12 @@
                 "use_early_stopping": true,
                 "objective": "metric_learning",
                 "finetune_criterion": "ContrastiveLoss",
-                "finetune_epochs": 50,
-                "finetune_backone_lr": 2e-4,
-                "finetune_head_lr": 1e-3,
-                "finetune_weight_decay": 1e-4,
-                "patience": 5,
-                "warmup_epochs": 10
+                "finetune_epochs": 70,
+                "finetune_backone_lr": 3e-5,
+                "finetune_head_lr": 5e-4,
+                "finetune_weight_decay": 5e-5,
+                "patience": 10,
+                "warmup_epochs": 5
             }
         },
         "TripletLoss": {
@@ -356,12 +356,12 @@
                 "use_early_stopping": true,
                 "objective": "metric_learning",
                 "finetune_criterion": "TripletLoss",
-                "finetune_epochs": 30,
-                "finetune_backone_lr": 5e-4,
-                "finetune_head_lr": 3e-3,
-                "finetune_weight_decay": 1e-4,
-                "patience": 3,
-                "warmup_epochs": 5
+                "finetune_epochs": 60,
+                "finetune_backone_lr": 5e-5,
+                "finetune_head_lr": 1e-3,
+                "finetune_weight_decay": 5e-5,
+                "patience": 8,
+                "warmup_epochs": 3
             },
             "resnet101": {
                 "model_name": "resnet101",
@@ -384,12 +384,12 @@
                 "use_early_stopping": true,
                 "objective": "metric_learning",
                 "finetune_criterion": "TripletLoss",
-                "finetune_epochs": 30,
-                "finetune_backone_lr": 5e-4,
-                "finetune_head_lr": 3e-3,
-                "finetune_weight_decay": 1e-4,
-                "patience": 3,
-                "warmup_epochs": 5
+                "finetune_epochs": 60,
+                "finetune_backone_lr": 3e-5,
+                "finetune_head_lr": 1e-3,
+                "finetune_weight_decay": 5e-5,
+                "patience": 8,
+                "warmup_epochs": 3
             },
             "vit_b_32": {
                 "model_name": "vit_b_32",
@@ -412,12 +412,12 @@
                 "use_early_stopping": true,
                 "objective": "metric_learning",
                 "finetune_criterion": "TripletLoss",
-                "finetune_epochs": 50,
-                "finetune_backone_lr": 2e-4,
-                "finetune_head_lr": 1e-3,
-                "finetune_weight_decay": 1e-4,
-                "patience": 5,
-                "warmup_epochs": 10
+                "finetune_epochs": 70,
+                "finetune_backone_lr": 3e-5,
+                "finetune_head_lr": 5e-4,
+                "finetune_weight_decay": 5e-5,
+                "patience": 10,
+                "warmup_epochs": 5
             },
             "vit_b_16": {
                 "model_name": "vit_b_16",
@@ -440,12 +440,12 @@
                 "use_early_stopping": true,
                 "objective": "metric_learning",
                 "finetune_criterion": "TripletLoss",
-                "finetune_epochs": 50,
-                "finetune_backone_lr": 2e-4,
-                "finetune_head_lr": 1e-3,
-                "finetune_weight_decay": 1e-4,
-                "patience": 5,
-                "warmup_epochs": 10
+                "finetune_epochs": 70,
+                "finetune_backone_lr": 3e-5,
+                "finetune_head_lr": 5e-4,
+                "finetune_weight_decay": 5e-5,
+                "patience": 10,
+                "warmup_epochs": 5
             }
         }
     }

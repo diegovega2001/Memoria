@@ -24,11 +24,12 @@ CompCars/
 │   ├── config/                   # Configuraciones
 │   │   ├── TransformConfig.py   # Transformaciones de imágenes
 │   │   └── __init__.py
-│   ├── data/                     # Procesamiento de datos
+│   ├── data/                     # Procesamiento de datos      
 │   │   ├── DataFrameMaker.py    # Generación de dataset CSV
 │   │   ├── MyDataset.py         # Dataset personalizado PyTorch
 │   │   └── __init__.py
 │   ├── models/                   # Modelos de ML
+│   │   ├── Criterions.py        # Criterions para metric learning
 │   │   ├── MyVisionModel.py     # Modelo multi-vista
 │   │   └── __init__.py
 │   ├── pipeline/                 # Pipelines de experimentación
@@ -48,6 +49,8 @@ CompCars/
 ├── results/                      # Resultados y modelos guardados
 ├── requirements.txt              # Dependencias completas
 ├── requirements-dev.txt          # Dependencias esenciales
+├── dataset.csv                   # Dataset creado por DataFrameMaker.py
+├── config.json                   # Configs de finetuning y estudio de embeddings
 └── README.md                    # Este archivo
 ```
 
@@ -114,7 +117,8 @@ from src.config import create_standard_transform
 # Configurar transformaciones
 transform = create_standard_transform(
     resize=(224, 224),
-    normalize=True
+    normalize=True,
+    augment=False
 )
 
 # Crear dataset
