@@ -232,6 +232,51 @@ class ArcFaceLoss(nn.Module):
         logits = logits * self.scale
         
         return logits
+
+class ArcFaceInference(nn.Module):
+    """
+    Capa de inferencia para ArcFace que solo usa cosine similarity sin margen angular.
+    Útil para evaluación donde no se tienen labels durante predicción.
+    
+    Args:
+        weight: Matriz de pesos W de ArcFace entrenado (embedding_dim x num_classes).
+        scale: Factor de escala (mismo usado durante entrenamiento).
+    
+    Example:
+        >>> # Durante entrenamiento se usa ArcFaceLoss
+        >>> arcface = ArcFaceLoss(embedding_dim=512, num_classes=163)
+        >>> # Durante inferencia se usa ArcFaceInference con los pesos entrenados
+        >>> arcface_inf = ArcFaceInference(arcface.weight, arcface.scale)
+        >>> logits = arcface_inf(embeddings)  # No requiere labels
+    """
+    def __init__(self, weight: nn.Parameter, scale: float):
+        super().__init__()
+        self.weight = weight  # Compartir referencia a los pesos entrenados
+        self.scale = scale
+    
+    def forward(self, embeddings: torch.Tensor) -> torch.Tensor:
+        """
+        Inferencia usando solo cosine similarity (sin margen angular).
+        
+        Args:
+            embeddings: Embeddings normalizados (batch_size, embedding_dim).
+            
+        Returns:
+            Logits escalados (batch_size, num_classes).
+        """
+        # Normalizar embeddings
+        embeddings_norm = F.normalize(embeddings, p=2, dim=1)
+        
+        # Normalizar pesos
+        weight_norm = F.normalize(self.weight, p=2, dim=0)
+        
+        # Cosine similarity
+        cosine = F.linear(embeddings_norm, weight_norm)
+        
+        # Escalar
+        logits = cosine * self.scale
+        
+        return logits
     
 
 def create_metric_learning_criterion(
