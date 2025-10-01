@@ -31,13 +31,13 @@ from .EmbeddingsPipeline import (
 
 # Definir qué se exporta cuando se hace "from src.pipeline import *"
 __all__ = [
-    # Pipeline Classes
+    # Clases de pipeline
     'FineTuningPipeline',
     'EmbeddingsPipeline',
     # Exceptions
     'FineTuningPipelineError',
     'EmbeddingsPipelineError',
-    # Factory functions
+    # Funciones de generación
     'create_finetuning_pipeline',
     'create_embeddings_pipeline',
 ]

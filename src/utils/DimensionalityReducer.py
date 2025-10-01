@@ -22,9 +22,13 @@ from sklearn.manifold import TSNE, trustworthiness
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
+
 # Configuración de warnings y logging
 warnings.filterwarnings('ignore')
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 
 class DimensionalityReducer:

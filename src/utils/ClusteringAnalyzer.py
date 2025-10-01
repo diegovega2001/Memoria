@@ -29,9 +29,13 @@ from sklearn.metrics import (
 from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.neighbors import NearestNeighbors
 
+
 # Configuración de warnings y logging
 warnings.filterwarnings('ignore')
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 
 @jit(nopython=True)

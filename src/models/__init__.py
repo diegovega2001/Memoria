@@ -16,15 +16,20 @@ from __future__ import annotations
 
 # Importar las clases principales del módulo
 from .MyVisionModel import MultiViewVisionModel, VisionModelError, create_vision_model
-
+from .Criterions import TripletLoss, ContrastiveLoss, ArcFaceLoss, create_metric_learning_criterion
 # Definir qué se exporta cuando se hace "from src.models import *"
 __all__ = [
-    # Vision Models
+    # Clase base modelo
     'MultiViewVisionModel',
+    # Clases metric learning
+    'TripletLoss',
+    'ContrastiveLoss',
+    'ArcFaceLoss',
     # Exceptions
     'VisionModelError',
-    # Factory functions
+    # Factory functionszs
     'create_vision_model',
+    'create_metric_learning_criterion'
 ]
 
 # Información del módulo

@@ -2,12 +2,11 @@
 Pipeline de Fine-Tuning para modelos de visión.
 
 Este módulo proporciona un pipeline enfocado exclusivamente en el fine-tuning
-de modelos de visión, incluyendo entrenamiento, evaluación y guardado de resultados.
+de modelos de visión.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 import warnings
@@ -16,15 +15,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader
 
 from src.config.TransformConfig import create_standard_transform
-from src.utils.JsonUtils import safe_json_dump
 from src.data.MyDataset import create_car_dataset
+from src.models.Criterions import create_metric_learning_criterion
 from src.models.MyVisionModel import create_vision_model
+from src.utils.JsonUtils import safe_json_dump
+from src.defaults import *
 
 # Configuración de warnings y logging
 warnings.filterwarnings('ignore')
@@ -79,7 +78,7 @@ class FineTuningPipeline:
         
         # Componentes del pipeline
         self.dataset_dict = None
-        self.model = None
+        self.model = DEFAULT_MODEL_NAME
         self.results = {
             'config': config.copy(),
             'experiment_name': self.experiment_name,
@@ -92,47 +91,63 @@ class FineTuningPipeline:
         """Crea el dataset para entrenamiento."""
         logging.info("Creando dataset...")
         
-        # Crear transformaciones con bbox si está habilitado
-        transform = create_standard_transform(
+        # Crear transformaciones separadas para train y val/test
+        augment = self.config.get('augment', DEFAULT_USE_AUGMENT)
+        if augment:
+             train_transform = create_standard_transform(
+                size=tuple(self.config.get('image_size', DEFAULT_RESIZE)),
+                grayscale=self.config.get('grayscale', DEFAULT_GRAYSCALE),
+                use_bbox=self.config.get('use_bbox', DEFAULT_USE_BBOX),
+                augment=augment
+            )
+        else: 
+            train_transform = create_standard_transform(augment=augment)
+
+        # Inference transform: SIN augmentación
+        val_transform = create_standard_transform(
             size=tuple(self.config.get('image_size', [224, 224])),
             grayscale=self.config.get('grayscale', False),
-            use_bbox=self.config.get('use_bbox', True)
+            use_bbox=self.config.get('use_bbox', True),
+            augment=False
         )
-        
-        # Crear dataset
+
         self.dataset_dict = create_car_dataset(
             df=self.df,
-            views=self.config.get('views', ['front']),
-            min_images_for_abundant_class=self.config.get('min_images_for_abundant_class', 6),
-            seed=self.config.get('seed', 3),
-            transform=transform,
-            augment=self.config.get('augment', False),
-            model_type='vision',
-            description_include=''
+            views=self.config.get('views', DEFAULT_VIEWS),
+            min_images_for_abundant_class=self.config.get('min_images_for_abundant_class', DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS),
+            seed=self.config.get('seed', DEFAULT_SEED),
+            P=self.config.get('P', DEFAULT_P),
+            K=self.config.get('K', DEFAULT_K),
+            train_transform=train_transform,
+            val_transform=val_transform,
+            batch_size=self.config.get('batch_size', DEFAULT_BATCH_SIZE),
+            num_workers=self.config.get('num_workers', DEFAULT_NUM_WORKERS),
+            model_type=self.config.get('model_type', DEFAULT_MODEL_TYPE),
+            description_include=self.config.get('description_include', DEFAULT_DESCRIPTION_INCLUDE)
         )
         
         # Guardar estadísticas del dataset
         dataset_stats = self.dataset_dict['dataset'].get_dataset_statistics()
         self.results['dataset_stats'] = dataset_stats
-            
+    
     def create_model(self) -> None:
         """Crea e inicializa el modelo."""
         if self.dataset_dict is None:
             raise FineTuningPipelineError("Dataset no creado. Ejecutar create_dataset() primero.")
         
-        logging.info("Creando modelo...")
-        
+        logging.info("Creando modelo...")  
         device = torch.device(self.config.get('device', 'cpu'))
         
         self.model = create_vision_model(
-            name=f"{self.config.get('model_name', 'resnet50')}_{self.experiment_name}",
-            model_name=self.config.get('model_name', 'resnet50'),
-            weights=self.config.get('weights', 'IMAGENET1K_V1'),
+            name=f"{self.config.get('model_name', DEFAULT_MODEL_NAME)}_{self.experiment_name}",
+            model_name=self.config.get('model_name', DEFAULT_MODEL_NAME),
+            weights=self.config.get('weights', DEFAULT_WEIGHTS),
             device=device,
+            objective=self.config.get('objective', DEFAULT_OBJECTIVE),
             dataset_dict=self.dataset_dict,
-            batch_size=self.config.get('batch_size', 32),
-            num_workers=self.config.get('num_workers', 0),
-            pin_memory=self.config.get('pin_memory', True)
+            batch_size=self.config.get('batch_size', DEFAULT_BATCH_SIZE),
+            num_workers=self.config.get('num_workers', DEFAULT_NUM_WORKERS),
+            pin_memory=self.config.get('pin_memory', DEFAULT_PIN_MEMORY)
         )
         
         # Guardar información del modelo
@@ -158,7 +173,13 @@ class FineTuningPipeline:
         self.results['baseline_embeddings'] = baseline_embeddings
         
         logging.info(f"Embeddings baseline extraídos: {baseline_embeddings.shape}")
-        logging.info(f"Accuracy baseline: {baseline_eval['accuracy']:.4f}")
+        
+        # Log según el tipo de métrica
+        if 'accuracy' in baseline_eval:
+            logging.info(f"Accuracy baseline: {baseline_eval['accuracy']:.4f}")
+        elif 'recall@1' in baseline_eval:
+            logging.info(f"Recall@1 baseline: {baseline_eval['recall@1']:.4f}")
+            logging.info(f"Recall@5 baseline: {baseline_eval['recall@5']:.4f}")
         
         return baseline_embeddings
     
@@ -168,41 +189,73 @@ class FineTuningPipeline:
             raise FineTuningPipelineError("Modelo no creado. Ejecutar create_model() primero.")
                 
         # Configurar criterio de pérdida desde config
-        criterion_name = self.config.get('finetune criterion', 'CrossEntropyLoss')
-        criterion_cls = getattr(torch.nn, criterion_name)
-        criterion = criterion_cls()
+        criterion_name = self.config.get('finetune_criterion', DEFAULT_FINETUNE_CRITERION)
+        if criterion_name in ['TripletLoss', 'ContrastiveLoss', 'ArcFaceLoss']:
+            # Validar que el objetivo sea metric_learning
+            if self.model.objective != 'metric_learning':
+                raise FineTuningPipelineError(
+                    f"Criterio '{criterion_name}' requiere objective='metric_learning', "
+                    f"pero el modelo tiene objective='{self.model.objective}'"
+                )
+            criterion = create_metric_learning_criterion(
+                loss_type=criterion_name, 
+                embedding_dim=self.model.embedding_dim, 
+                num_classes=self.dataset_dict['dataset'].num_models
+            )
+        else:
+            # Validar que el objetivo sea classification para criterios estándar
+            if self.model.objective != 'classification':
+                logging.warning(
+                    f"Usando criterio '{criterion_name}' con objective='{self.model.objective}'. "
+                    "Considere usar un criterio de metric learning apropiado."
+                )
+            criterion_cls = getattr(torch.nn, criterion_name)
+            criterion = criterion_cls()
+        
+        # Mover el criterio al dispositivo del modelo
+        criterion.to(self.model.device)
         
         # Configurar optimizador desde config
-        optimizer_type = self.config.get('finetune optimizer type', 'AdamW')
-        base_lr = self.config.get('finetune optimizer lr', 1e-4)
-        head_lr = self.config.get('finetune optimizer head_lr', base_lr)
-        weight_decay = self.config.get('finetune optimizer weight_decay', 1e-6)
+        optimizer_type = self.config.get('finetune_optimizer_type', DEFAULT_FINETUNE_OPTIMIZER_TYPE)
+        base_lr = self.config.get('finetune_backbone_lr', DEFAULT_BACKBONE_LR)
+        head_lr = self.config.get('finetune_head_lr', DEFAULT_HEAD_LR)
+        weight_decay = self.config.get('finetune_optimizer_weight_decay', DEFAULT_WEIGHT_DECAY)
         
         optimizer_cls = getattr(torch.optim, optimizer_type)
         optimizer_params = [
             {"params": self.model.model.parameters(), "lr": base_lr, "weight_decay": weight_decay},
-            {"params": self.model.classification_layer.parameters(), "lr": head_lr, "weight_decay": weight_decay}
+            {"params": self.model.head_layer.parameters(), "lr": head_lr, "weight_decay": weight_decay}
         ]
+        
+        # Agregar parámetros de arcface_layer si existe
+        if self.model.arcface_layer is not None:
+            optimizer_params.append({
+                "params": self.model.arcface_layer.parameters(), 
+                "lr": head_lr, 
+                "weight_decay": weight_decay
+            })
+            logging.info("Parámetros de arcface_layer agregados al optimizador")
+        
         optimizer = optimizer_cls(optimizer_params)
         
         # Configurar scheduler
         scheduler = None
-        if self.config.get('use_scheduler', True):
+        if self.config.get('use_scheduler', DEFAULT_USE_SCHEDULER):
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer=optimizer,
-                T_max=self.config.get('finetune epochs', 10)
+                T_max=self.config.get('finetune_epochs', 10)
             )
         
         # Configurar early stopping
         early_stopping = None
-        if self.config.get('use_early_stopping', True):
-            early_stopping = {'patience': self.config.get('patience', 5)}
+        if self.config.get('use_early_stopping', DEFAULT_USE_EARLY_STOPPING):
+            early_stopping = {'patience': self.config.get('patience', DEFAULT_PATIENCE)}
         
         # Ejecutar fine-tuning
         training_history = self.model.finetune(
             criterion=criterion,
             optimizer=optimizer,
-            epochs=self.config.get('finetune epochs', 10),
+            epochs=self.config.get('finetune_epochs', 10),
             warmup_epochs=self.config.get('warmup_epochs', 1),
             scheduler=scheduler,
             early_stopping=early_stopping
@@ -239,7 +292,13 @@ class FineTuningPipeline:
         self.results['finetuned_embeddings'] = finetuned_embeddings
         
         logging.info(f"Embeddings post fine-tuning extraídos: {finetuned_embeddings.shape}")
-        logging.info(f"Accuracy post fine-tuning: {finetuned_eval['accuracy']:.4f}")
+        
+        # Log según el tipo de métrica
+        if 'accuracy' in finetuned_eval:
+            logging.info(f"Accuracy post fine-tuning: {finetuned_eval['accuracy']:.4f}")
+        elif 'recall@1' in finetuned_eval:
+            logging.info(f"Recall@1 post fine-tuning: {finetuned_eval['recall@1']:.4f}")
+            logging.info(f"Recall@5 post fine-tuning: {finetuned_eval['recall@5']:.4f}")
         
         return finetuned_embeddings
     
@@ -345,20 +404,43 @@ class FineTuningPipeline:
             # 5. Extraer embeddings post fine-tuning
             self.extract_finetuned_embeddings()
             
-            # 6. Calcular mejora
-            baseline_acc = self.results['baseline']['evaluation']['accuracy']
-            finetuned_acc = self.results['finetuned']['evaluation']['accuracy']
-            improvement = finetuned_acc - baseline_acc
+            # 6. Calcular mejora según el tipo de métrica
+            baseline_eval = self.results['baseline']['evaluation']
+            finetuned_eval = self.results['finetuned']['evaluation']
+            
+            if 'accuracy' in baseline_eval:
+                # Modo classification
+                baseline_metric = baseline_eval['accuracy']
+                finetuned_metric = finetuned_eval['accuracy']
+                metric_name = 'accuracy'
+            elif 'recall@1' in baseline_eval:
+                # Modo metric_learning
+                baseline_metric = baseline_eval['recall@1']
+                finetuned_metric = finetuned_eval['recall@1']
+                metric_name = 'recall@1'
+            else:
+                raise FineTuningPipelineError("No se encontró métrica válida en los resultados de evaluación")
+            
+            improvement = finetuned_metric - baseline_metric
+            improvement_percentage = (improvement / baseline_metric) * 100 if baseline_metric > 0 else 0.0
             
             self.results['summary'] = {
-                'baseline_accuracy': baseline_acc,
-                'finetuned_accuracy': finetuned_acc,
-                'accuracy_improvement': improvement,
-                'improvement_percentage': (improvement / baseline_acc) * 100
+                'metric_name': metric_name,
+                f'baseline_{metric_name}': baseline_metric,
+                f'finetuned_{metric_name}': finetuned_metric,
+                f'{metric_name}_improvement': improvement,
+                'improvement_percentage': improvement_percentage,
+                'objective': self.model.objective
             }
             
+            # Agregar métricas adicionales para metric_learning
+            if 'recall@5' in baseline_eval:
+                self.results['summary']['baseline_recall@5'] = baseline_eval['recall@5']
+                self.results['summary']['finetuned_recall@5'] = finetuned_eval['recall@5']
+                self.results['summary']['recall@5_improvement'] = finetuned_eval['recall@5'] - baseline_eval['recall@5']
+            
             logging.info(f"=== PIPELINE COMPLETADO ===")
-            logging.info(f"Mejora de accuracy: {improvement:.4f} ({(improvement/baseline_acc)*100:.2f}%)")
+            logging.info(f"Mejora de {metric_name}: {improvement:.4f} ({improvement_percentage:.2f}%)")
             
             # 7. Guardar resultados automáticamente
             zip_path = self.save_results()

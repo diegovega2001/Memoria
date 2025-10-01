@@ -3,6 +3,7 @@ Módulo de configuración de transformaciones para imágenes.
 
 Este módulo proporciona una clase para configurar y aplicar transformaciones
 de imágenes usando torchvision, siguiendo las mejores prácticas de Python.
+Incluye augmentación agresiva para mejorar la generalización.
 """
 
 from __future__ import annotations
@@ -15,18 +16,20 @@ from typing import Any, Optional, Tuple, Union
 
 from torchvision import transforms
 
+from src.defaults import (DEFAULT_COLOR_JITTER_BRIGHTNESS, DEFAULT_COLOR_JITTER_CONTRAST, DEFAULT_COLOR_JITTER_SATURATION, DEFAULT_COLOR_JITTER_HUE, DEFAULT_ROTATION_DEGREES, 
+                      DEFAULT_RANDOM_PERSPECTIVE, DEFAULT_RANDOM_ERASING_P, DEFAULT_GRAYSCALE, DEFAULT_RESIZE, DEFAULT_NORMALIZE, DEFAULT_USE_BBOX, DEFAULT_AUGMENT)
 # Configuración de warnings y logging
 warnings.filterwarnings('ignore')
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Constantes para normalización ImageNet
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 GRAYSCALE_MEAN = [0.5]
 GRAYSCALE_STD = [0.5]
-
-# Tamaño por defecto para ImageNet
-DEFAULT_RESIZE = (224, 224)
 
 
 @dataclass
@@ -36,7 +39,8 @@ class TransformConfig:
     
     Esta clase permite configurar y generar transformaciones de PyTorch
     para preprocesamiento de imágenes, incluyendo redimensionado, 
-    conversión a escala de grises, normalización y cropping por bounding box.
+    conversión a escala de grises, normalización, cropping por bounding box
+    y augmentación agresiva para entrenamiento.
     
     Attributes:
         grayscale: Si True, convierte la imagen a escala de grises manteniendo
@@ -47,17 +51,19 @@ class TransformConfig:
                   o valores apropiados para escala de grises.
         use_bbox: Si True, permite el uso de bounding boxes para hacer crop.
                  Requiere que se pase la bbox como parámetro en __call__.
+        augment: Si True, aplica augmentación agresiva (solo para entrenamiento).
     
     Example:
-        >>> config = TransformConfig(grayscale=True, resize=(256, 256), use_bbox=True)
+        >>> config = TransformConfig(grayscale=True, resize=(256, 256), use_bbox=True, augment=True)
         >>> bbox = [100, 100, 400, 400]  # [x_min, y_min, x_max, y_max]
         >>> processed_image = config(image, bbox=bbox)
     """
     
-    grayscale: bool = False
+    grayscale: bool = DEFAULT_GRAYSCALE
     resize: Optional[Tuple[int, int]] = DEFAULT_RESIZE
-    normalize: bool = True
-    use_bbox: bool = False
+    normalize: bool = DEFAULT_NORMALIZE
+    use_bbox: bool = DEFAULT_USE_BBOX
+    augment: bool = DEFAULT_AUGMENT
     
     def __post_init__(self) -> None:
         """Valida los parámetros después de la inicialización."""
@@ -90,8 +96,73 @@ class TransformConfig:
         if self.resize is not None:
             transform_list.append(transforms.Resize(self.resize))
         
+        # Augmentación Agresiva
+        if self.augment:
+            transform_list.extend([
+                # Random horizontal flip (50% probabilidad)
+                transforms.RandomHorizontalFlip(p=0.5),
+                
+                # Random rotation (±20 grados)
+                transforms.RandomRotation(
+                    degrees=DEFAULT_ROTATION_DEGREES,
+                    interpolation=transforms.InterpolationMode.BILINEAR
+                ),
+                
+                # Random affine (zoom, traslación)
+                transforms.RandomAffine(
+                    degrees=0,  # Ya tenemos rotación arriba
+                    translate=(0.1, 0.1),  # ±10% traslación
+                    scale=(0.9, 1.1),  # 90%-110% zoom
+                    shear=10,  # ±10 grados de shear
+                    interpolation=transforms.InterpolationMode.BILINEAR
+                ),
+                
+                # Random perspective (perspectiva 3D)
+                transforms.RandomPerspective(
+                    distortion_scale=DEFAULT_RANDOM_PERSPECTIVE,
+                    p=0.5
+                ),
+                
+                # Color jitter (brillo, contraste, saturación, hue)
+                transforms.ColorJitter(
+                    brightness=DEFAULT_COLOR_JITTER_BRIGHTNESS,
+                    contrast=DEFAULT_COLOR_JITTER_CONTRAST,
+                    saturation=DEFAULT_COLOR_JITTER_SATURATION,
+                    hue=DEFAULT_COLOR_JITTER_HUE
+                ),
+                
+                # Random gaussian blur
+                transforms.GaussianBlur(
+                    kernel_size=5,
+                    sigma=(0.1, 2.0)
+                ),
+                
+                # Random adjust sharpness
+                transforms.RandomAdjustSharpness(
+                    sharpness_factor=2.0,
+                    p=0.3
+                ),
+                
+                # Random autocontrast
+                transforms.RandomAutocontrast(p=0.2),
+                
+                # Random equalize
+                transforms.RandomEqualize(p=0.2),
+            ])
+        
         # Conversión a tensor (siempre necesaria)
         transform_list.append(transforms.ToTensor())
+        
+        # Random erasing 
+        if self.augment:
+            transform_list.append(
+                transforms.RandomErasing(
+                    p=DEFAULT_RANDOM_ERASING_P,
+                    scale=(0.02, 0.15),  # Tamaño del área a borrar
+                    ratio=(0.3, 3.3),     # Aspect ratio
+                    value='random'        # Valor aleatorio para el área borrada
+                )
+            )
         
         # Normalización
         if self.normalize:
@@ -191,8 +262,9 @@ class TransformConfig:
 # Funciones de conveniencia
 def create_standard_transform(
     size: Tuple[int, int] = DEFAULT_RESIZE,
-    grayscale: bool = False,
-    use_bbox: bool = False
+    grayscale: bool = DEFAULT_GRAYSCALE,
+    use_bbox: bool = DEFAULT_USE_BBOX,
+    augment: bool = DEFAULT_AUGMENT
 ) -> TransformConfig:
     """
     Crea una configuración estándar de transformaciones.
@@ -201,6 +273,7 @@ def create_standard_transform(
         size: Tamaño de redimensionado (height, width).
         grayscale: Si aplicar escala de grises.
         use_bbox: Si habilitar el uso de bounding boxes para crop.
+        augment: Si aplicar augmentación agresiva (para entrenamiento).
         
     Returns:
         TransformConfig: Configuración lista para usar.
@@ -209,23 +282,6 @@ def create_standard_transform(
         grayscale=grayscale,
         resize=size,
         normalize=True,
-        use_bbox=use_bbox
-    )
-
-
-def create_inference_transform(use_bbox: bool = False) -> TransformConfig:
-    """
-    Crea una configuración optimizada para inferencia.
-    
-    Args:
-        use_bbox: Si habilitar el uso de bounding boxes para crop.
-    
-    Returns:
-        TransformConfig: Configuración para inferencia.
-    """
-    return TransformConfig(
-        grayscale=False,
-        resize=DEFAULT_RESIZE,
-        normalize=True,
-        use_bbox=use_bbox
+        use_bbox=use_bbox,
+        augment=augment
     )

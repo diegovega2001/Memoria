@@ -15,11 +15,12 @@ from __future__ import annotations
 
 # Importar las clases principales del módulo
 from .TransformConfig import TransformConfig, create_standard_transform
-
 # Definir qué se exporta cuando se hace "from src.config import *"
 __all__ = [
+    # Clase base
     'TransformConfig',
-    'create_standard_transform',
+    # Creador
+    'create_standard_transform'
 ]
 
 # Información del módulo

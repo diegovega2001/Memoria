@@ -12,16 +12,19 @@ import copy
 import logging
 import random
 import warnings
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import torch
-import torchvision.transforms.functional as F
 from PIL import Image
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Dataset, BatchSampler, DataLoader
+
+from src.defaults import (DEFAULT_VIEWS, DEFAULT_SEED, DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS, DEFAULT_P, DEFAULT_K, DEFAULT_MODEL_TYPE,
+                      DEFAULT_DESCRIPTION_INCLUDE, DEFAULT_VERBOSE, DEFAULT_BATCH_SIZE, DEFAULT_NUM_WORKERS)
+from src.config.TransformConfig import create_standard_transform
+
 
 # Configuración de warnings y logging
 warnings.filterwarnings('ignore')
@@ -30,12 +33,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-# Constantes del dataset
-DEFAULT_VIEWS = ['front', 'rear']
-DEFAULT_SEED = 3
-DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS = 5  
-DEFAULT_P = 8  # Número de clases por batch para contrastive learning
-DEFAULT_K = 4  # Número de muestras por clase en cada batch
 MODEL_TYPES = {'vision', 'textual', 'both'}
 DESCRIPTION_OPTIONS = {'', 'released_year', 'type', 'all'}
 UNKNOWN_VALUES = {'unknown', 'Unknown', '', None}
@@ -89,14 +86,13 @@ class CarDataset(Dataset):
     def __init__(
         self,
         df: pd.DataFrame,
-        views: List[str] = None,
+        views: List[str] = DEFAULT_VIEWS,
         min_images_for_abundant_class: int = DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS,
         seed: int = DEFAULT_SEED,
         transform: Optional[Any] = None,
-        augment: bool = False,
-        model_type: str = 'vision',
-        description_include: str = '',
-        verbose: bool = True
+        model_type: str = DEFAULT_MODEL_TYPE,
+        description_include: str = DEFAULT_DESCRIPTION_INCLUDE,
+        verbose: bool = DEFAULT_VERBOSE
     ) -> None:
         """
         Inicializa el dataset de vehículos con estrategia adaptativa.
@@ -107,7 +103,6 @@ class CarDataset(Dataset):
             min_images_for_abundant_class: Umbral para clasificar clases como abundantes.
             seed: Semilla para reproducibilidad aleatoria.
             transform: Transformaciones de torchvision para las imágenes.
-            augment: Si aplicar augmentación horizontal flip aleatoria.
             model_type: Tipo de salida ('vision', 'textual', 'both').
             description_include: Información adicional en descripciones.
             verbose: Si mostrar logs detallados durante la inicialización.
@@ -128,7 +123,6 @@ class CarDataset(Dataset):
         self.min_images_for_abundant_class = min_images_for_abundant_class
         self.seed = seed
         self.transform = transform 
-        self.augment = augment
         self.model_type = model_type
         self.description_include = description_include
         self.verbose = verbose
@@ -477,8 +471,8 @@ class CarDataset(Dataset):
         view_images: Dict[str, List[str]], 
         model_year_tuple: Tuple[str, Any],
         n_train: int, 
-        n_val: int, 
-        n_test: int, 
+        n_val: int,
+        n_test,
         min_images: int
     ) -> Tuple[List, List, List]:
         """Crea muestras para train/val/test."""
@@ -578,13 +572,6 @@ class CarDataset(Dataset):
                     images.append((img, bbox))
                 except Exception as e:
                     raise FileNotFoundError(f"No se pudo cargar imagen {path}: {e}") from e
-
-            # Aplicar augmentación solo en training
-            if self.augment and self.current_split == 'train':
-                images = [
-                    (F.hflip(img) if random.random() > 0.5 else img, bbox)
-                    for img, bbox in images
-                ]
 
             # Aplicar transformaciones
             if self.transform:
@@ -826,14 +813,14 @@ class IdentitySampler(BatchSampler):
 # Funciones de conveniencia
 def create_car_dataset(
     df: pd.DataFrame,
-    views: List[str] = None,
+    views: List[str] = DEFAULT_VIEWS,
     min_images_for_abundant_class: int = DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS,
     P: int = DEFAULT_P,
     K: int = DEFAULT_K,
-    transform=None,
-    augment: bool = True,
-    batch_size: int = 32,
-    num_workers: int = 4,
+    train_transform=None,
+    val_transform=None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    num_workers: int = DEFAULT_NUM_WORKERS,
     seed: int = DEFAULT_SEED,
     **dataset_kwargs
 ) -> Dict[str, Any]:
@@ -846,8 +833,9 @@ def create_car_dataset(
         min_images_for_abundant_class: Umbral para clases abundantes.
         P: Número de clases por batch para contrastive learning (solo train).
         K: Número de muestras por clase por batch (solo train).
-        transform: Transformaciones para imágenes.
-        augment: Si aplicar augmentación en entrenamiento.
+        train_transform: Transformaciones para train (CON augmentación recomendado).
+        val_transform: Transformaciones para val/test (SIN augmentación).
+                      Si es None, usa train_transform sin augmentación.
         batch_size: Tamaño de batch para val y test.
         num_workers: Número de workers para DataLoaders.
         seed: Semilla para reproducibilidad.
@@ -855,26 +843,30 @@ def create_car_dataset(
     
     Returns:
         Diccionario con 'dataset', 'train_loader', 'val_loader', 'test_loader', 'train_sampler'.
+        
+    Example:
+        >>> from src.config.TransformConfig import create_training_transform
+        >>> transform = create_training_transform(size=(224, 224), use_bbox=True)
+        >>> dataset_dict = create_car_dataset(df=datafram, views=['front', 'rear'], train_transform=train_transform, val_transform=val_transform)
     """
     
-    # Crear dataset principal
-    dataset = CarDataset(
+    # Crear dataset base para obtener samples (sin transform específico aún)
+    base_dataset = CarDataset(
         df=df,
         views=views,
         min_images_for_abundant_class=min_images_for_abundant_class,
-        transform=transform,
-        augment=augment,
+        transform=None,  # Sin transform en el base
         seed=seed,
         **dataset_kwargs
     )
     
     # Train loader con IdentitySampler P×K
-    train_sampler = IdentitySampler(dataset.train_samples, P=P, K=K, seed=seed)
+    train_sampler = IdentitySampler(base_dataset.train_samples, P=P, K=K, seed=seed)
     
-    # Crear copias del dataset para cada split (evita repetir inicialización)
-    train_dataset = copy.deepcopy(dataset)
-    train_dataset.augment = augment  # Asegurar augmentación para train
-    train_dataset.verbose = False     # Silenciar logs en copias
+    # Crear datasets para cada split con transforms específicos
+    train_dataset = copy.deepcopy(base_dataset)
+    train_dataset.transform = create_standard_transform(augment=True)  # Transform CON augmentación
+    train_dataset.verbose = False
     train_dataset.set_split('train')
     
     train_loader = DataLoader(
@@ -885,9 +877,9 @@ def create_car_dataset(
     )
     
     # Val loader
-    val_dataset = copy.deepcopy(dataset)
-    val_dataset.augment = False   # Sin augmentación para validación
-    val_dataset.verbose = False   # Silenciar logs en copias
+    val_dataset = copy.deepcopy(base_dataset)
+    val_dataset.transform = create_standard_transform(augment=False)  # Transform SIN augmentación
+    val_dataset.verbose = False
     val_dataset.set_split('val')
     
     val_loader = DataLoader(
@@ -899,9 +891,8 @@ def create_car_dataset(
     )
     
     # Test loader
-    test_dataset = copy.deepcopy(dataset)
-    test_dataset.augment = False  # Sin augmentación para test
-    test_dataset.verbose = False  # Silenciar logs en copias
+    test_dataset = copy.deepcopy(base_dataset)
+    test_dataset.transform = create_standard_transform(augment=False)  # Transform SIN augmentación
     test_dataset.set_split('test')
     
     test_loader = DataLoader(
@@ -917,8 +908,14 @@ def create_car_dataset(
     logging.info(f"  - Val: {len(val_loader)} batches de tamaño {batch_size}")
     logging.info(f"  - Test: {len(test_loader)} batches de tamaño {batch_size}")
     
+    # Log sobre augmentación
+    train_has_augment = hasattr(train_transform, 'augment') and train_transform.augment
+    val_has_augment = hasattr(val_transform, 'augment') and val_transform.augment
+    logging.info(f"  - Train augmentación: {'Habilitada' if train_has_augment else 'Deshabilitada'}")
+    logging.info(f"  - Val/Test augmentación: {'Habilitada' if val_has_augment else 'Deshabilitada'}")
+    
     return {
-        "dataset": dataset,
+        "dataset": base_dataset,
         "train_loader": train_loader,
         "val_loader": val_loader,
         "test_loader": test_loader,
@@ -965,36 +962,3 @@ def validate_dataset_structure(df: pd.DataFrame) -> Dict[str, Any]:
             })
 
     return validation
-
-
-def create_adaptive_loaders(
-    df: pd.DataFrame,
-    views: List[str] = None,
-    min_images_for_abundant_class: int = DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS,
-    P: int = DEFAULT_P,
-    K: int = DEFAULT_K,
-    transform=None,
-    augment: bool = True,
-    batch_size: int = 32,
-    num_workers: int = 4,
-    seed: int = DEFAULT_SEED,
-    **dataset_kwargs
-) -> Dict[str, Any]:
-    """
-    Alias para create_car_dataset para mantener compatibilidad.
-    
-    Crea dataset con estrategia adaptativa y DataLoaders optimizados.
-    """
-    return create_car_dataset(
-        df=df,
-        views=views,
-        min_images_for_abundant_class=min_images_for_abundant_class,
-        P=P,
-        K=K,
-        transform=transform,
-        augment=augment,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        seed=seed,
-        **dataset_kwargs
-    )

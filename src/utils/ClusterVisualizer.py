@@ -22,8 +22,12 @@ import numpy as np
 import pandas as pd
 from matplotlib import image as mpimg
 
+
 warnings.filterwarnings('ignore')
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 
 class ClusterVisualizer:
@@ -495,10 +499,10 @@ class ClusterVisualizer:
                 mixed_clusters.sort(key=lambda x: x[1]['n_unique_models'])
                 min_classes = mixed_clusters[0][1]['n_unique_models']
                 logging.warning(
-                    f"❌ No se puede visualizar: todos los clusters tienen >{max_classes_per_cluster} clases. "
+                    f"No se puede visualizar: todos los clusters tienen >{max_classes_per_cluster} clases. "
                     f"Mínimo encontrado: {min_classes} clases.")
             else:
-                logging.warning("❌ No hay clusters válidos para visualizar")
+                logging.warning("No hay clusters válidos para visualizar")
 
     def print_cluster_statistics(self):
         """Imprime estadísticas generales del clustering."""
