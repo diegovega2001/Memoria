@@ -533,6 +533,9 @@ class CarDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         """
         Obtiene una muestra del dataset según el split actual.
+        
+        Si hay un error al cargar la muestra solicitada, intenta cargar
+        una muestra alternativa aleatoria para evitar romper el batch completo.
 
         Args:
             idx: Índice de la muestra.
@@ -541,8 +544,56 @@ class CarDataset(Dataset):
             Diccionario con imágenes, etiquetas y descripción textual (si aplica).
 
         Raises:
-            FileNotFoundError: Si alguna imagen no se puede cargar.
-            Exception: Para otros errores de procesamiento.
+            RuntimeError: Si no se puede cargar ninguna muestra después de varios intentos.
+        """
+        # Intentar cargar la muestra original
+        try:
+            return self._load_sample(idx)
+        except Exception as e:
+            logging.warning(
+                f"Error cargando muestra {idx} del split {self.current_split}: "
+                f"{type(e).__name__}: {e}. Intentando muestra alternativa..."
+            )
+            
+            # Intentar con muestras alternativas (máximo 3 intentos)
+            current_samples = self.get_current_samples()
+            max_retries = 3
+            
+            for retry in range(max_retries):
+                try:
+                    # Seleccionar índice aleatorio diferente
+                    alt_idx = random.randint(0, len(current_samples) - 1)
+                    if alt_idx == idx:
+                        continue  # Evitar reintentar el mismo índice
+                    
+                    logging.info(f"Intento {retry + 1}/{max_retries}: Cargando muestra alternativa {alt_idx}")
+                    return self._load_sample(alt_idx)
+                    
+                except Exception as retry_error:
+                    logging.warning(
+                        f"Intento {retry + 1} falló al cargar muestra {alt_idx}: "
+                        f"{type(retry_error).__name__}: {retry_error}"
+                    )
+                    continue
+            
+            # Si todos los intentos fallaron, lanzar excepción
+            raise RuntimeError(
+                f"No se pudo cargar muestra {idx} ni ninguna de {max_retries} alternativas "
+                f"del split {self.current_split}"
+            )
+    
+    def _load_sample(self, idx: int) -> Dict[str, Any]:
+        """
+        Carga una muestra específica del dataset.
+        
+        Args:
+            idx: Índice de la muestra a cargar.
+            
+        Returns:
+            Diccionario con la muestra procesada.
+            
+        Raises:
+            Exception: Si hay algún error al cargar la muestra.
         """
         try:
             current_samples = self.get_current_samples()
@@ -576,12 +627,23 @@ class CarDataset(Dataset):
             # Aplicar transformaciones
             if self.transform:
                 processed_images = []
-                for img, bbox in images:
-                    if hasattr(self.transform, 'use_bbox') and self.transform.use_bbox and bbox is not None:
-                        processed_img = self.transform(img, bbox=bbox)
-                    else:
-                        processed_img = self.transform(img)
-                    processed_images.append(processed_img)
+                for img_idx, (img, bbox) in enumerate(images):
+                    try:
+                        if hasattr(self.transform, 'use_bbox') and self.transform.use_bbox and bbox is not None:
+                            processed_img = self.transform(img, bbox=bbox)
+                        else:
+                            processed_img = self.transform(img)
+                        processed_images.append(processed_img)
+                    except Exception as e:
+                        # Log del error pero continuar con la siguiente imagen
+                        logging.error(
+                            f"Error aplicando transformaciones a imagen {img_idx} (path: {paths[img_idx]}): "
+                            f"{type(e).__name__}: {e}"
+                        )
+                        # Re-lanzar la excepción ya que no podemos continuar sin esta imagen
+                        raise RuntimeError(
+                            f"Error crítico al transformar imagen {img_idx} del sample {idx}: {e}"
+                        ) from e
                 images = processed_images
             else:
                 # Si no hay transformaciones, extraer solo las imágenes
@@ -613,7 +675,7 @@ class CarDataset(Dataset):
             return output
 
         except Exception as e:
-            logging.error(f"Error cargando muestra {idx} del split {self.current_split}: {e}")
+            # Re-lanzar la excepción para que __getitem__ pueda manejarla con retry
             raise
 
     def get_dataset_statistics(self) -> Dict[str, Any]:
@@ -808,6 +870,38 @@ class IdentitySampler(BatchSampler):
             
     def __len__(self):
         return self.num_batches
+
+
+def robust_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Función de collate robusta que maneja errores en muestras individuales.
+    
+    Si alguna muestra del batch es None (por error en __getitem__), 
+    se filtra y se continúa con las muestras válidas.
+    
+    Args:
+        batch: Lista de muestras del dataset.
+        
+    Returns:
+        Diccionario con batch colado, o None si no hay muestras válidas.
+        
+    Raises:
+        RuntimeError: Si todas las muestras del batch fallaron.
+    """
+    # Filtrar muestras None (que fallaron)
+    valid_batch = [sample for sample in batch if sample is not None]
+    
+    if len(valid_batch) == 0:
+        raise RuntimeError("Todas las muestras del batch fallaron al cargar")
+    
+    if len(valid_batch) < len(batch):
+        logging.warning(
+            f"Se descartaron {len(batch) - len(valid_batch)} muestras del batch debido a errores"
+        )
+    
+    # Usar el collate default de PyTorch para las muestras válidas
+    from torch.utils.data.dataloader import default_collate
+    return default_collate(valid_batch)
 
 
 # Funciones de conveniencia

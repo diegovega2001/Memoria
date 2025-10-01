@@ -186,33 +186,55 @@ class TransformConfig:
             bbox: Bounding box [x_min, y_min, x_max, y_max] como lista o string.
             
         Returns:
-            Imagen recortada.
-            
-        Raises:
-            ValueError: Si el formato de bbox es inválido.
+            Imagen recortada si el bbox es válido, imagen original en caso contrario.
         """
         try:
+            # Validar que tenemos una imagen
+            if image is None:
+                logging.warning("Imagen es None, no se puede aplicar bbox crop")
+                return image
+                
             # Parsear bbox si es string
             if isinstance(bbox, str):
-                bbox = ast.literal_eval(bbox)
+                try:
+                    bbox = ast.literal_eval(bbox)
+                except (ValueError, SyntaxError) as e:
+                    logging.warning(f"Error parseando bbox string '{bbox}': {e}, usando imagen completa")
+                    return image
             
             # Validar formato
-            if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
-                raise ValueError(f"Bbox debe tener 4 coordenadas, recibido: {bbox}")
+            if not isinstance(bbox, (list, tuple)):
+                logging.warning(f"Bbox debe ser lista o tupla, recibido {type(bbox)}, usando imagen completa")
+                return image
+                
+            if len(bbox) != 4:
+                logging.warning(f"Bbox debe tener 4 coordenadas, recibido {len(bbox)} en {bbox}, usando imagen completa")
+                return image
             
-            x_min, y_min, x_max, y_max = bbox
+            # Extraer y validar coordenadas
+            try:
+                x_min, y_min, x_max, y_max = [float(x) for x in bbox]
+            except (ValueError, TypeError) as e:
+                logging.warning(f"Error convirtiendo coordenadas de bbox {bbox}: {e}, usando imagen completa")
+                return image
             
-            # Validar coordenadas
+            # Validar orden de coordenadas
             if x_min >= x_max or y_min >= y_max:
-                logging.warning(f"Bbox inválida (coordenadas): {bbox}, usando imagen completa")
+                logging.warning(f"Bbox con coordenadas inválidas (min >= max): {bbox}, usando imagen completa")
                 return image
             
             # Asegurar que las coordenadas estén dentro de la imagen
-            img_width, img_height = image.size
-            x_min = max(0, min(x_min, img_width - 1))
-            y_min = max(0, min(y_min, img_height - 1))
-            x_max = max(x_min + 1, min(x_max, img_width))
-            y_max = max(y_min + 1, min(y_max, img_height))
+            try:
+                img_width, img_height = image.size
+            except AttributeError:
+                logging.warning(f"Imagen no tiene atributo 'size', tipo: {type(image)}, usando imagen completa")
+                return image
+            
+            # Convertir a enteros y ajustar límites
+            x_min = int(max(0, min(x_min, img_width - 1)))
+            y_min = int(max(0, min(y_min, img_height - 1)))
+            x_max = int(max(x_min + 1, min(x_max, img_width)))
+            y_max = int(max(y_min + 1, min(y_max, img_height)))
             
             # Aplicar crop
             cropped_image = image.crop((x_min, y_min, x_max, y_max))
@@ -220,7 +242,8 @@ class TransformConfig:
             return cropped_image
             
         except Exception as e:
-            logging.warning(f"Error aplicando bbox crop {bbox}: {e}, usando imagen completa")
+            # Captura cualquier excepción inesperada
+            logging.warning(f"Error inesperado aplicando bbox crop con bbox={bbox}: {type(e).__name__}: {e}, usando imagen completa")
             return image
     
     def __call__(self, image: Any, bbox: Optional[Union[list, str]] = None) -> Any:
@@ -236,17 +259,30 @@ class TransformConfig:
             Any: Imagen transformada.
             
         Raises:
-            RuntimeError: Si hay un error durante la transformación.
+            RuntimeError: Si hay un error crítico durante la transformación que
+                         impide procesar la imagen (por ejemplo, imagen corrupta).
         """
         try:
             # Aplicar crop de bounding box si está habilitado y se proporciona
+            # _apply_bbox_crop siempre retorna una imagen válida
             if self.use_bbox and bbox is not None:
                 image = self._apply_bbox_crop(image, bbox)
             
+            # Aplicar transformaciones de torchvision
             transform = self._get_transforms()
-            return transform(image)
+            transformed_image = transform(image)
+            
+            return transformed_image
+            
         except Exception as e:
-            raise RuntimeError(f"Error al aplicar transformaciones: {e}") from e
+            # Log del error con más contexto para debugging
+            error_msg = (
+                f"Error crítico al aplicar transformaciones: {type(e).__name__}: {e}. "
+                f"Configuración: grayscale={self.grayscale}, resize={self.resize}, "
+                f"normalize={self.normalize}, use_bbox={self.use_bbox}, augment={self.augment}"
+            )
+            logging.error(error_msg)
+            raise RuntimeError(error_msg) from e
     
     def __repr__(self) -> str:
         """Representación string mejorada para debugging."""
