@@ -967,7 +967,8 @@ def create_car_dataset(
         train_dataset,
         batch_sampler=train_sampler,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        collate_fn=robust_collate_fn
     )
     
     # Val loader
@@ -981,7 +982,8 @@ def create_car_dataset(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        collate_fn=robust_collate_fn
     )
     
     # Test loader
@@ -994,7 +996,8 @@ def create_car_dataset(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        collate_fn=robust_collate_fn
     )
     
     logging.info(f"DataLoaders creados:")
