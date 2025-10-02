@@ -314,8 +314,10 @@ class MultiViewVisionModel(nn.Module):
         projection_layer = nn.Sequential(
             nn.Linear(input_dim, output_dim),
             nn.BatchNorm1d(output_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(output_dim, output_dim)
+            nn.ReLU(inplace=True),            
+            nn.Dropout(p=0.3),
+            nn.Linear(output_dim, output_dim),
+            nn.BatchNorm1d(output_dim)
         )
         
         # Inicialización
