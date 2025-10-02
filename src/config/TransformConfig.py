@@ -102,7 +102,7 @@ class TransformConfig:
                 # Random horizontal flip (50% probabilidad)
                 transforms.RandomHorizontalFlip(p=0.5),
                 
-                # Random rotation (±20 grados)
+                # Random rotation (±5 grados)
                 transforms.RandomRotation(
                     degrees=DEFAULT_ROTATION_DEGREES,
                     interpolation=transforms.InterpolationMode.BILINEAR
@@ -111,16 +111,10 @@ class TransformConfig:
                 # Random affine (zoom, traslación)
                 transforms.RandomAffine(
                     degrees=0,  # Ya tenemos rotación arriba
-                    translate=(0.1, 0.1),  # ±10% traslación
-                    scale=(0.9, 1.1),  # 90%-110% zoom
-                    shear=10,  # ±10 grados de shear
+                    translate=(0.05, 0.05),  # ±0.05% traslación
+                    scale=(0.95, 1.05),  # 95%-115% zoom
+                    shear=None,
                     interpolation=transforms.InterpolationMode.BILINEAR
-                ),
-                
-                # Random perspective (perspectiva 3D)
-                transforms.RandomPerspective(
-                    distortion_scale=DEFAULT_RANDOM_PERSPECTIVE,
-                    p=0.5
                 ),
                 
                 # Color jitter (brillo, contraste, saturación, hue)
@@ -130,24 +124,6 @@ class TransformConfig:
                     saturation=DEFAULT_COLOR_JITTER_SATURATION,
                     hue=DEFAULT_COLOR_JITTER_HUE
                 ),
-                
-                # Random gaussian blur
-                transforms.GaussianBlur(
-                    kernel_size=5,
-                    sigma=(0.1, 2.0)
-                ),
-                
-                # Random adjust sharpness
-                transforms.RandomAdjustSharpness(
-                    sharpness_factor=2.0,
-                    p=0.3
-                ),
-                
-                # Random autocontrast
-                transforms.RandomAutocontrast(p=0.2),
-                
-                # Random equalize
-                transforms.RandomEqualize(p=0.2),
             ])
         
         # Conversión a tensor (siempre necesaria)
@@ -158,8 +134,8 @@ class TransformConfig:
             transform_list.append(
                 transforms.RandomErasing(
                     p=DEFAULT_RANDOM_ERASING_P,
-                    scale=(0.02, 0.15),  # Tamaño del área a borrar
-                    ratio=(0.3, 3.3),     # Aspect ratio
+                    scale=(0.02, 0.08),  # Tamaño del área a borrar
+                    ratio=(0.5, 2.0),     # Aspect ratio
                     value='random'        # Valor aleatorio para el área borrada
                 )
             )
