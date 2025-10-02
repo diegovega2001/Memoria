@@ -165,12 +165,13 @@ class FineTuningPipeline:
         """Extrae embeddings antes del fine-tuning."""
         if self.model is None:
             raise FineTuningPipelineError("Modelo no creado. Ejecutar create_model() primero.")
+        
         use_arcface = self.config.get('finetune_criterion') == 'ArcFaceLoss'
 
         logging.info("Extrayendo embeddings baseline...")
 
-        baseline_embeddings = self.model.extract_val_embeddings(use_arcface=use_arcface)
-        baseline_eval = self.model.evaluate()
+        baseline_embeddings = self.model.extract_val_embeddings()
+        baseline_eval = self.model.evaluate(use_arcface=use_arcface)
         
         # Guardar resultados baseline
         self.results['baseline'] = {
@@ -286,10 +287,12 @@ class FineTuningPipeline:
         if self.model is None:
             raise FineTuningPipelineError("Modelo no creado.")
         
+        use_arcface = self.config.get('finetune_criterion') == 'ArcFaceLoss'
+
         logging.info("Extrayendo embeddings post fine-tuning...")
         
         finetuned_embeddings = self.model.extract_val_embeddings()
-        finetuned_eval = self.model.evaluate()
+        finetuned_eval = self.model.evaluate(use_arcface=use_arcface)
         
         # Guardar resultados post fine-tuning
         self.results['finetuned'] = {
