@@ -490,11 +490,14 @@ class MultiViewVisionModel(nn.Module):
             VisionModelError: Si hay errores durante el entrenamiento.
         """
         try:
-            # Inicializar arcface_layer solo si el criterion es ArcFaceLoss y aún no existe
-            if isinstance(criterion, ArcFaceLoss) and self.arcface_layer is None:
-                self.arcface_layer = self.create_arcface_layer()
-                self.arcface_layer.to(self.device)
-                logging.info("ArcFace layer inicializada para entrenamiento")
+            # Asegurar que arcface_layer existe si el criterion es ArcFaceLoss
+            if isinstance(criterion, ArcFaceLoss):
+                if self.arcface_layer is None:
+                    self.arcface_layer = self.create_arcface_layer()
+                    self.arcface_layer.to(self.device)
+                    logging.info("ArcFace layer inicializada para entrenamiento")
+                else:
+                    logging.info("ArcFace layer ya existe, usando la existente")
             
             # Configuración de entrenamiento
             history = {
@@ -685,23 +688,23 @@ class MultiViewVisionModel(nn.Module):
         
         return criterion(emb1_batch, emb2_batch, label_batch)
 
-    def _predict_by_similarity(self, embeddings: torch.Tensor, dataloader: DataLoader) -> torch.Tensor:
+    def _predict_by_similarity(self, embeddings: torch.Tensor) -> torch.Tensor:
         """
         Predice clases usando similitud con centroides de clase.
+        IMPORTANTE: Calcula centroides usando TRAIN_LOADER para evitar data leakage.
         
         Args:
-            embeddings: Embeddings a predecir.
-            dataloader: DataLoader completo para calcular centroides de clase.
+            embeddings: Embeddings a predecir (del val/test loader).
             
         Returns:
-            Predicciones basadas en similitud con centroides.
+            Predicciones basadas en similitud con centroides del conjunto de entrenamiento.
         """
-        # Calcular centroides de clase desde el dataloader completo
+        # Calcular centroides de clase desde el TRAIN LOADER (no del eval loader)
         class_embeddings = {}
         
         self.model.eval()
         with torch.no_grad():
-            for batch in dataloader:
+            for batch in self.train_loader:
                 images = batch['images'].to(self.device)
                 labels = batch['labels']
                 
@@ -942,19 +945,23 @@ class MultiViewVisionModel(nn.Module):
 
         return avg_loss, accuracy, recalls
 
-    def evaluate(self, dataloader: Optional[DataLoader] = None, use_similarity: bool = None) -> Dict[str, float]:
+    def evaluate(self, dataloader: Optional[DataLoader] = None, use_similarity: bool = None, use_arcface: bool = False) -> Dict[str, float]:
         """
         Evalúa el modelo en un conjunto de datos.
 
         Args:
             dataloader: DataLoader a evaluar. Si None, usa val_loader.
-            use_similarity: Si usar predicción por similitud. Si None, se decide automáticamente.
+            use_similarity: Si usar predicción por similitud con centroides del train set. Si None, se decide automáticamente.
 
         Returns:
             Diccionario con métricas de evaluación.
         """
         if dataloader is None:
             dataloader = self.val_loader
+        if use_arcface and self.arcface_layer is None:
+            self.arcface_layer = self.create_arcface_layer()
+            self.arcface_layer.to(self.device)
+            logging.info("ArcFace layer inicializada para evaluación")
 
         self.model.eval()
         if self.head_layer is not None:
@@ -967,9 +974,9 @@ class MultiViewVisionModel(nn.Module):
 
         # Decidir método de predicción
         if use_similarity is None:
-            # Si tenemos ArcFace, usar predicción basada en logits (no similitud)
-            # De lo contrario, decidir por objetivo
-            use_similarity = (self.arcface_layer is None) and (self.objective == 'metric_learning')
+            # Para metric_learning sin ArcFace layer entrenada, usar similitud con centroides
+            # Para classification o ArcFace, usar clasificación directa
+            use_similarity = (self.objective == 'metric_learning') and (self.arcface_layer is None or not any(p.requires_grad for p in self.arcface_layer.parameters()))
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc='Evaluating', leave=False):
@@ -994,8 +1001,8 @@ class MultiViewVisionModel(nn.Module):
 
             # Realizar predicción según el método
             if use_similarity:
-                # Metric learning sin ArcFace: usar predicción por similitud con centroides
-                predicted = self._predict_by_similarity(all_embeddings, dataloader)
+                # Metric learning: usar predicción por similitud con centroides del TRAIN SET
+                predicted = self._predict_by_similarity(all_embeddings)
                 accuracy = 100.0 * (predicted == all_labels).float().mean().item()
                 
                 return {
@@ -1003,7 +1010,7 @@ class MultiViewVisionModel(nn.Module):
                     'total_samples': len(all_labels),
                     'predictions': predicted.numpy(),
                     'labels': all_labels.numpy(),
-                    'method': 'similarity_centroids'
+                    'method': 'similarity_centroids_from_train'
                 }
             else:
                 # Clasificación o ArcFace: usar head_layer o arcface inference
