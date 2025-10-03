@@ -23,6 +23,11 @@ from .FineTuningPipeline import (
     FineTuningPipelineError,
     create_finetuning_pipeline,
 )
+# from .CLIPFineTuningPipeline import (
+#     CLIPFineTuningPipeline,
+#     CLIPFineTuningPipelineError,
+#     create_clip_finetuning_pipeline,
+# )
 from .EmbeddingsPipeline import (
     EmbeddingsPipeline,
     EmbeddingsPipelineError,
@@ -33,12 +38,15 @@ from .EmbeddingsPipeline import (
 __all__ = [
     # Clases de pipeline
     'FineTuningPipeline',
+    'CLIPFineTuningPipeline',
     'EmbeddingsPipeline',
     # Exceptions
     'FineTuningPipelineError',
+    'CLIPFineTuningPipelineError',
     'EmbeddingsPipelineError',
     # Funciones de generación
     'create_finetuning_pipeline',
+    'create_clip_finetuning_pipeline',
     'create_embeddings_pipeline',
 ]
 

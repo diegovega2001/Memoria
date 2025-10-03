@@ -179,8 +179,8 @@ class ClusteringAnalyzer:
         n_samples = self.embeddings.shape[0]
         max_cluster_size = min(15, n_samples // 50)
         return {
-            'min_cluster_size': (2, max_cluster_size),  
-            'min_samples': (1, 5)
+            'min_cluster_size': (1, max_cluster_size),  
+            'min_samples': (1, 8)
         }
 
     def _get_optics_params_range(self) -> Dict[str, Tuple]:
@@ -192,7 +192,7 @@ class ClusteringAnalyzer:
         """
         n_samples = self.embeddings.shape[0]
         return {
-            'min_samples': (2, 6),  
+            'min_samples': (1, 8),  
             'xi': (0.005, 0.05),    
             'min_cluster_size': (2, min(10, n_samples // 100))
         }
@@ -205,7 +205,7 @@ class ClusteringAnalyzer:
         óptimos adaptados a las características del espacio de embeddings.
         """
         return {
-            'distance_threshold': (10.0, 25.0), 
+            'distance_threshold': (5.0, 30.0), 
             'linkage': ['ward', 'complete', 'average']  
         }
     

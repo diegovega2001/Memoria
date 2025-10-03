@@ -37,7 +37,8 @@ from src.defaults import (
     DEFAULT_FINETUNE_OPTIMIZER_TYPE,
     DEFAULT_FINETUNE_EPOCHS,
     DEFAULT_WEIGHTS_FILENAME,
-    DEFAULT_OUTPUT_EMBEDDING_DIM
+    DEFAULT_OUTPUT_EMBEDDING_DIM,
+    DEFAULT_USE_AMP
 )
 
 
@@ -373,7 +374,7 @@ class MultiViewVisionModel(nn.Module):
         Returns:
             Instancia de ContrastiveLoss configurada.
         """
-        return ContrastiveLoss(margin=margin)
+        return ContrastiveLoss(margin=margin, clip=False)
 
 
     def extract_embeddings(
@@ -469,7 +470,8 @@ class MultiViewVisionModel(nn.Module):
         scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         early_stopping: Optional[Dict[str, Any]] = None,
         save_best: bool = True,
-        checkpoint_dir: Optional[Union[str, Path]] = None
+        checkpoint_dir: Optional[Union[str, Path]] = None,
+        use_amp: bool = DEFAULT_USE_AMP
     ) -> Dict[str, List[float]]:
         """
         Realiza fine-tuning del modelo.
@@ -483,6 +485,7 @@ class MultiViewVisionModel(nn.Module):
             early_stopping: Configuración de early stopping.
             save_best: Si guardar el mejor modelo durante entrenamiento.
             checkpoint_dir: Directorio para guardar checkpoints.
+            use_amp: Si usar Automatic Mixed Precision para acelerar entrenamiento.
 
         Returns:
             Diccionario con historial de entrenamiento.
@@ -525,11 +528,21 @@ class MultiViewVisionModel(nn.Module):
             early_stop_patience = early_stopping.get('patience', 10) if early_stopping else None
             early_stop_min_delta = early_stopping.get('min_delta', 0.001) if early_stopping else None
 
-            logging.info(f"Iniciando fine-tuning: {epochs} épocas, warmup: {warmup_epochs}")
+            # Configurar GradScaler para AMP si está habilitado y hay GPU disponible
+            scaler = None
+            device_type = 'cuda' if self.device.type == 'cuda' else 'cpu'
+            if use_amp and device_type == 'cuda':
+                scaler = torch.amp.GradScaler('cuda')
+                logging.info("AMP (Automatic Mixed Precision) habilitado con GradScaler")
+            elif use_amp and device_type != 'cuda':
+                logging.warning("AMP solicitado pero no hay GPU disponible, deshabilitando AMP")
+                use_amp = False
+
+            logging.info(f"Iniciando fine-tuning: {epochs} épocas, warmup: {warmup_epochs}, AMP: {use_amp}")
 
             for epoch in range(epochs):
                 # Entrenamiento
-                train_loss = self._train_epoch(criterion, optimizer, epoch, epochs)
+                train_loss = self._train_epoch(criterion, optimizer, epoch, epochs, use_amp=use_amp, scaler=scaler)
                 
                 # Warmup scheduler
                 if warmup_scheduler and epoch < warmup_epochs:
@@ -785,7 +798,9 @@ class MultiViewVisionModel(nn.Module):
         criterion: nn.Module,
         optimizer: torch.optim.Optimizer,
         epoch: int,
-        total_epochs: int
+        total_epochs: int,
+        use_amp: bool = False,
+        scaler: Optional[torch.amp.GradScaler] = None
     ) -> float:
         """Ejecuta una época de entrenamiento."""
         self.model.train()
@@ -800,41 +815,47 @@ class MultiViewVisionModel(nn.Module):
                 optimizer.zero_grad()
 
                 # Forward pass - extraer embeddings
-                embeddings = torch.flatten(
-                    self.model(images.to(self.device)), 
-                    start_dim=1
-                )  
+                with torch.amp.autocast(device_type='cuda' if self.device.type == 'cuda' else 'cpu', enabled=use_amp):
+                # Forward pass - extraer embeddings
+                    embeddings = torch.flatten(
+                        self.model(images.to(self.device)), 
+                        start_dim=1
+                    )  
                 
-                # Calcular pérdida según el objetivo
-                if self.objective == 'classification':
-                    outputs = self.head_layer(embeddings)
-                    loss = criterion(outputs, labels)
-                    
-                elif self.objective == 'metric_learning':
-                    # Proyectar embeddings a través de head_layer
-                    projected_embeddings = self.head_layer(embeddings)
-                    
-                    if isinstance(criterion, ArcFaceLoss):
-                        # Para ArcFace, usar la capa arcface_layer
-                        logits = self.arcface_layer(projected_embeddings, labels)
-                        loss = F.cross_entropy(logits, labels)
+                    # Calcular pérdida según el objetivo
+                    if self.objective == 'classification':
+                        outputs = self.head_layer(embeddings)
+                        loss = criterion(outputs, labels)
+                        
+                    elif self.objective == 'metric_learning':
+                        # Proyectar embeddings a través de head_layer
+                        projected_embeddings = self.head_layer(embeddings)
+                        
+                        if isinstance(criterion, ArcFaceLoss):
+                            # Para ArcFace, usar la capa arcface_layer
+                            logits = self.arcface_layer(projected_embeddings, labels)
+                            loss = F.cross_entropy(logits, labels)
 
-                    elif isinstance(criterion, TripletLoss):
-                        # Para Triplet Loss, necesitamos crear triplets
-                        loss = self._compute_triplet_loss(criterion, projected_embeddings, labels)
-                        
-                    elif isinstance(criterion, ContrastiveLoss):
-                        # Para Contrastive Loss, necesitamos crear pares
-                        loss = self._compute_contrastive_loss(criterion, projected_embeddings, labels)
-                        
+                        elif isinstance(criterion, TripletLoss):
+                            # Para Triplet Loss, necesitamos crear triplets
+                            loss = self._compute_triplet_loss(criterion, projected_embeddings, labels)
+                            
+                        elif isinstance(criterion, ContrastiveLoss):
+                            # Para Contrastive Loss, necesitamos crear pares
+                            loss = self._compute_contrastive_loss(criterion, projected_embeddings, labels)
+                            
+                        else:
+                            raise VisionModelError(f"Función de pérdida no soportada para metric_learning.")
                     else:
-                        raise VisionModelError(f"Función de pérdida no soportada para metric_learning.")
-                else:
-                    raise VisionModelError(f"Objetivo '{self.objective}' no reconocido.")
+                        raise VisionModelError(f"Objetivo '{self.objective}' no reconocido.")
 
-                # Backward pass
-                loss.backward()
-                optimizer.step()
+                if use_amp and scaler is not None:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
 
                 total_loss += loss.item()
                 pbar.set_postfix({'loss': f'{loss.item():.4f}'})

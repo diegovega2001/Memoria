@@ -10,7 +10,8 @@ Proyecto de investigación para clasificación de vehículos utilizando el datas
 
 ### Objetivos Principales
 
-- **Fine-tuning** de modelos pre-entrenados (ResNet, etc.)
+- **Fine-tuning** de modelos pre-entrenados (ResNet, ViT, **CLIP**, etc.)
+- **Modelos multimodales** con CLIP (imagen + texto)
 - **Análisis de embeddings** antes y después del fine-tuning  
 - **Clustering y visualización** de representaciones aprendidas
 - **Soporte multi-vista** (front/rear) de vehículos
@@ -30,11 +31,12 @@ CompCars/
 │   │   └── __init__.py
 │   ├── models/                   # Modelos de ML
 │   │   ├── Criterions.py        # Criterions para metric learning
-│   │   ├── MyVisionModel.py     # Modelo multi-vista
+│   │   ├── MyVisionModel.py     # Modelo multi-vista (visión pura)
+│   │   ├── MyCLIPModel.py       # Modelo CLIP (visión + lenguaje)
 │   │   └── __init__.py
 │   ├── pipeline/                 # Pipelines de experimentación
-│   │   ├── FineTuningPipeline.py # Pipeline de entrenamiento
-│   │   ├── EmbeddingsPipeline.py # Pipeline de análisis
+│   │   ├── FineTuningPipeline.py      # Pipeline finetuning
+│   │   ├── EmbeddingsPipeline.py      # Pipeline de análisis
 │   │   └── __init__.py
 │   └── utils/                    # Utilidades
 │       ├── ClusteringAnalyzer.py # Análisis de clustering
@@ -103,8 +105,18 @@ pip install -e .
 ### Importaciones básicas
 
 ```python
-from src import CarDataset, MultiViewVisionModel, FineTuningPipeline
+# Modelos de visión pura
+from src.models import MultiViewVisionModel, create_vision_model
+
+# Modelos CLIP (visión + lenguaje)
+from src.models import MultiViewCLIPModel, create_clip_model
+
+# Pipelines
+from src.pipeline import FineTuningPipeline, CLIPFineTuningPipeline
+
+# Utilidades
 from src.config import TransformConfig
+from src.data import create_car_dataset
 from src.utils import ClusteringAnalyzer
 ```
 
@@ -167,6 +179,8 @@ embeddings_pipeline.analyze_embeddings()
 
 ## Flujo de Trabajo Típico
 
+### Opción 1: Modelos de Visión Pura
+
 ```python
 # 1. Preparar datos
 dataset = create_car_dataset(...)
@@ -185,6 +199,35 @@ pipeline.extract_finetuned_embeddings()
 embeddings_pipeline = create_embeddings_pipeline(...)
 embeddings_pipeline.analyze_embeddings()
 ```
+
+### Opción 2: Modelos CLIP (Visión + Lenguaje) 🆕
+
+```python
+from src.pipeline import create_clip_finetuning_pipeline
+
+# 1. Configurar pipeline CLIP
+config = {
+    'model_name': 'clip-vit-base-patch32',
+    'model_type': 'both',  # Imágenes + texto
+    'description_include': 'all',  # Usar toda la info textual
+    'objective': 'metric_learning',
+    # ... más config
+}
+
+# 2. Crear pipeline
+pipeline = create_clip_finetuning_pipeline(config, df)
+
+# 3. Ejecutar fine-tuning por fases
+results = pipeline.run_full_pipeline(
+    phases=['text', 'projection', 'vision', 'projection_refine'],
+    embedding_mode='joint'  # imagen + texto
+)
+
+# 4. Guardar resultados
+pipeline.save_results("results/clip_experiments")
+```
+
+Ver [docs/CLIP_USAGE.md](docs/CLIP_USAGE.md) para documentación completa de CLIP.
 
 ## Configuración
 

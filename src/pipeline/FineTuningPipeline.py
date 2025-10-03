@@ -7,6 +7,7 @@ de modelos de visión.
 
 from __future__ import annotations
 
+import os
 import logging
 import shutil
 import warnings
@@ -22,6 +23,7 @@ from src.config.TransformConfig import create_standard_transform
 from src.data.MyDataset import create_car_dataset
 from src.models.Criterions import create_metric_learning_criterion
 from src.models.MyVisionModel import create_vision_model
+from src.models.MyCLIPModel import create_clip_model
 from src.utils.JsonUtils import safe_json_dump
 from src.defaults import *
 
@@ -32,6 +34,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 
 class FineTuningPipelineError(Exception):
     """Excepción personalizada para errores del pipeline de fine-tuning."""
@@ -40,7 +44,7 @@ class FineTuningPipelineError(Exception):
 
 class FineTuningPipeline:
     """
-    Pipeline para fine-tuning de modelos de visión.
+    Pipeline para fine-tuning de modelos de visión y lenguaje-visión.
     
     Esta clase maneja todo el proceso de fine-tuning: creación del dataset,
     inicialización del modelo, entrenamiento, evaluación y guardado de resultados.
@@ -49,7 +53,7 @@ class FineTuningPipeline:
         config: Configuración del pipeline.
         df: DataFrame con datos del dataset.
         dataset_dict: Diccionario con dataset, dataloaders y los sampler.
-        model: Modelo de visión para fine-tuning.
+        model: Modelo para fine-tuning.
         results: Diccionario con resultados del entrenamiento.
         
     Example:
@@ -62,7 +66,8 @@ class FineTuningPipeline:
         self, 
         config: Dict[str, Any], 
         df: pd.DataFrame,
-        experiment_name: Optional[str] = None
+        experiment_name: Optional[str] = None,
+        model_type: str = 'vision'
     ) -> None:
         """
         Inicializa el pipeline de fine-tuning.
@@ -75,7 +80,8 @@ class FineTuningPipeline:
         self.config = config
         self.df = df
         self.experiment_name = experiment_name or f"finetune_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
+        self.model_type = model_type
+
         # Componentes del pipeline
         self.dataset_dict = None
         self.model = DEFAULT_MODEL_NAME
@@ -144,19 +150,31 @@ class FineTuningPipeline:
         
         logging.info("Creando modelo...")  
         device = torch.device(self.config.get('device', 'cpu'))
-        
-        self.model = create_vision_model(
-            name=f"{self.config.get('model_name', DEFAULT_MODEL_NAME)}_{self.experiment_name}",
-            model_name=self.config.get('model_name', DEFAULT_MODEL_NAME),
-            weights=self.config.get('weights', DEFAULT_WEIGHTS),
-            device=device,
-            objective=self.config.get('objective', DEFAULT_OBJECTIVE),
-            dataset_dict=self.dataset_dict,
-            batch_size=self.config.get('batch_size', DEFAULT_BATCH_SIZE),
-            num_workers=self.config.get('num_workers', DEFAULT_NUM_WORKERS),
-            pin_memory=self.config.get('pin_memory', DEFAULT_PIN_MEMORY)
-        )
-        
+
+        if self.model_type == 'vision':
+            self.model = create_vision_model(
+                name=f"{self.config.get('model_name', DEFAULT_MODEL_NAME)}_{self.experiment_name}",
+                model_name=self.config.get('model_name', DEFAULT_MODEL_NAME),
+                weights=self.config.get('weights', DEFAULT_WEIGHTS),
+                device=device,
+                objective=self.config.get('objective', DEFAULT_OBJECTIVE),
+                dataset_dict=self.dataset_dict,
+                batch_size=self.config.get('batch_size', DEFAULT_BATCH_SIZE),
+                num_workers=self.config.get('num_workers', DEFAULT_NUM_WORKERS),
+                pin_memory=self.config.get('pin_memory', DEFAULT_PIN_MEMORY)
+            )
+
+        else:
+            self.model = create_clip_model(
+                name=f"{self.config.get('model_name', DEFAULT_CLIP_MODEL_NAME)}_{self.experiment_name}",
+                model_name=self.config.get('model_name', DEFAULT_CLIP_MODEL_NAME),
+                device=device,
+                dataset_dict=self.dataset_dict,
+                batch_size=self.config.get('batch_size', DEFAULT_BATCH_SIZE),
+                num_workers=self.config.get('num_workers', DEFAULT_NUM_WORKERS),
+                pin_memory=self.config.get('pin_memory', DEFAULT_PIN_MEMORY)
+            )
+    
         # Guardar información del modelo
         model_info = self.model.get_model_info()
         self.results['model_info'] = model_info
@@ -166,13 +184,17 @@ class FineTuningPipeline:
         if self.model is None:
             raise FineTuningPipelineError("Modelo no creado. Ejecutar create_model() primero.")
         
-        use_arcface = self.config.get('finetune_criterion') == 'ArcFaceLoss'
-
         logging.info("Extrayendo embeddings baseline...")
 
-        baseline_embeddings = self.model.extract_val_embeddings()
-        baseline_eval = self.model.evaluate(use_arcface=use_arcface)
+        if self.model_type == 'vision':
+            use_arcface = self.config.get('finetune_criterion') == 'ArcFaceLoss'
+            baseline_embeddings = self.model.extract_val_embeddings()
+            baseline_eval = self.model.evaluate(use_arcface=use_arcface)
         
+        else:
+            baseline_embeddings = self.model.extract_val_embeddings()
+            baseline_eval = self.model.evaluate()
+
         # Guardar resultados baseline
         self.results['baseline'] = {
             'embeddings_shape': list(baseline_embeddings.shape),
@@ -196,90 +218,144 @@ class FineTuningPipeline:
         """Ejecuta el fine-tuning del modelo."""
         if self.model is None:
             raise FineTuningPipelineError("Modelo no creado. Ejecutar create_model() primero.")
-                
-        # Configurar criterio de pérdida desde config
-        criterion_name = self.config.get('finetune_criterion', DEFAULT_FINETUNE_CRITERION)
-        if criterion_name in ['TripletLoss', 'ContrastiveLoss', 'ArcFaceLoss']:
-            # Validar que el objetivo sea metric_learning
-            if self.model.objective != 'metric_learning':
-                raise FineTuningPipelineError(
-                    f"Criterio '{criterion_name}' requiere objective='metric_learning', "
-                    f"pero el modelo tiene objective='{self.model.objective}'"
+
+        if self.model_type == 'vision':
+
+            # Configurar criterio de pérdida desde config
+            criterion_name = self.config.get('finetune_criterion', DEFAULT_FINETUNE_CRITERION)
+            if criterion_name in ['TripletLoss', 'ContrastiveLoss', 'ArcFaceLoss']:
+                # Validar que el objetivo sea metric_learning
+                if self.model.objective != 'metric_learning':
+                    raise FineTuningPipelineError(
+                        f"Criterio '{criterion_name}' requiere objective='metric_learning', "
+                        f"pero el modelo tiene objective='{self.model.objective}'"
+                    )
+                criterion = create_metric_learning_criterion(
+                    loss_type=criterion_name, 
+                    embedding_dim=self.model.embedding_dim, 
+                    num_classes=self.dataset_dict['dataset'].num_models
                 )
-            criterion = create_metric_learning_criterion(
-                loss_type=criterion_name, 
-                embedding_dim=self.model.embedding_dim, 
-                num_classes=self.dataset_dict['dataset'].num_models
-            )
-        else:
-            # Validar que el objetivo sea classification para criterios estándar
-            if self.model.objective != 'classification':
-                logging.warning(
-                    f"Usando criterio '{criterion_name}' con objective='{self.model.objective}'. "
-                    "Considere usar un criterio de metric learning apropiado."
+            else:
+                # Validar que el objetivo sea classification para criterios estándar
+                if self.model.objective != 'classification':
+                    logging.warning(
+                        f"Usando criterio '{criterion_name}' con objective='{self.model.objective}'. "
+                        "Considere usar un criterio de metric learning apropiado."
+                    )
+                criterion_cls = getattr(torch.nn, criterion_name)
+                criterion = criterion_cls()
+            
+            # Mover el criterio al dispositivo del modelo
+            criterion.to(self.model.device)
+            
+            # Configurar optimizador desde config
+            optimizer_type = self.config.get('finetune_optimizer_type', DEFAULT_FINETUNE_OPTIMIZER_TYPE)
+            base_lr = self.config.get('finetune_backbone_lr', DEFAULT_BACKBONE_LR)
+            head_lr = self.config.get('finetune_head_lr', DEFAULT_HEAD_LR)
+            weight_decay = self.config.get('finetune_optimizer_weight_decay', DEFAULT_WEIGHT_DECAY)
+            
+            optimizer_cls = getattr(torch.optim, optimizer_type)
+            optimizer_params = [
+                {"params": self.model.model.parameters(), "lr": base_lr, "weight_decay": weight_decay},
+                {"params": self.model.head_layer.parameters(), "lr": head_lr, "weight_decay": weight_decay}
+            ]
+            
+            # Agregar parámetros de arcface_layer si existe
+            if self.model.arcface_layer is not None:
+                optimizer_params.append({
+                    "params": self.model.arcface_layer.parameters(), 
+                    "lr": head_lr, 
+                    "weight_decay": weight_decay
+                })
+                logging.info("Parámetros de arcface_layer agregados al optimizador")
+            
+            optimizer = optimizer_cls(optimizer_params)
+            
+            # Configurar scheduler
+            scheduler = None
+            if self.config.get('use_scheduler', DEFAULT_USE_SCHEDULER):
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer=optimizer,
+                    T_max=self.config.get('finetune_epochs', 10)
                 )
-            criterion_cls = getattr(torch.nn, criterion_name)
-            criterion = criterion_cls()
-        
-        # Mover el criterio al dispositivo del modelo
-        criterion.to(self.model.device)
-        
-        # Configurar optimizador desde config
-        optimizer_type = self.config.get('finetune_optimizer_type', DEFAULT_FINETUNE_OPTIMIZER_TYPE)
-        base_lr = self.config.get('finetune_backbone_lr', DEFAULT_BACKBONE_LR)
-        head_lr = self.config.get('finetune_head_lr', DEFAULT_HEAD_LR)
-        weight_decay = self.config.get('finetune_optimizer_weight_decay', DEFAULT_WEIGHT_DECAY)
-        
-        optimizer_cls = getattr(torch.optim, optimizer_type)
-        optimizer_params = [
-            {"params": self.model.model.parameters(), "lr": base_lr, "weight_decay": weight_decay},
-            {"params": self.model.head_layer.parameters(), "lr": head_lr, "weight_decay": weight_decay}
-        ]
-        
-        # Agregar parámetros de arcface_layer si existe
-        if self.model.arcface_layer is not None:
-            optimizer_params.append({
-                "params": self.model.arcface_layer.parameters(), 
-                "lr": head_lr, 
-                "weight_decay": weight_decay
-            })
-            logging.info("Parámetros de arcface_layer agregados al optimizador")
-        
-        optimizer = optimizer_cls(optimizer_params)
-        
-        # Configurar scheduler
-        scheduler = None
-        if self.config.get('use_scheduler', DEFAULT_USE_SCHEDULER):
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            
+            # Configurar early stopping
+            early_stopping = None
+            if self.config.get('use_early_stopping', DEFAULT_USE_EARLY_STOPPING):
+                early_stopping = {'patience': self.config.get('patience', DEFAULT_PATIENCE)}
+            
+            # Configurar AMP
+            use_amp = self.config.get('use_amp', DEFAULT_USE_AMP)
+            
+            # Ejecutar fine-tuning
+            training_history = self.model.finetune(
+                criterion=criterion,
                 optimizer=optimizer,
-                T_max=self.config.get('finetune_epochs', 10)
+                epochs=self.config.get('finetune_epochs', 10),
+                warmup_epochs=self.config.get('warmup_epochs', 1),
+                scheduler=scheduler,
+                early_stopping=early_stopping,
+                use_amp=use_amp
             )
-        
-        # Configurar early stopping
-        early_stopping = None
-        if self.config.get('use_early_stopping', DEFAULT_USE_EARLY_STOPPING):
-            early_stopping = {'patience': self.config.get('patience', DEFAULT_PATIENCE)}
-        
-        # Ejecutar fine-tuning
-        training_history = self.model.finetune(
-            criterion=criterion,
-            optimizer=optimizer,
-            epochs=self.config.get('finetune_epochs', 10),
-            warmup_epochs=self.config.get('warmup_epochs', 1),
-            scheduler=scheduler,
-            early_stopping=early_stopping
-        )
-        
-        # Guardar resultados del fine-tuning
-        self.results['finetuning'] = {
-            'training_history': training_history,
-            'final_train_loss': training_history['train_loss'][-1],
-            'final_val_loss': training_history['val_loss'][-1],
-            'final_val_accuracy': training_history['val_accuracy'][-1],
-            'best_val_accuracy': max(training_history['val_accuracy']),
-            'total_epochs': len(training_history['train_loss'])
-        }
-        
+
+            # Guardar resultados del fine-tuning
+            self.results['finetuning'] = {
+                'training_history': training_history,
+                'final_train_loss': training_history['train_loss'][-1],
+                'final_val_loss': training_history['val_loss'][-1],
+                'final_val_accuracy': training_history['val_accuracy'][-1],
+                'best_val_accuracy': max(training_history['val_accuracy']),
+                'total_epochs': len(training_history['train_loss'])
+            }
+
+        else:
+            # CLIP fine-tuning por fases
+            use_amp = self.config.get('use_amp', DEFAULT_USE_AMP)
+            clip_finetuning_phases = self.config.get('clip_finetuning_phases', CLIP_DEFAULT_FINETUNING_PHASES)
+            training_history = {}
+            
+            # Configuración base del optimizador
+            optimizer_type = self.config.get('finetune_optimizer_type', DEFAULT_FINETUNE_OPTIMIZER_TYPE)
+            weight_decay = self.config.get('finetune_optimizer_weight_decay', DEFAULT_WEIGHT_DECAY)
+
+            for phase_name, phase_params in clip_finetuning_phases.items():
+                logging.info(f"\n{'='*60}")
+                logging.info(f"Iniciando fase: {phase_name}")
+                logging.info(f"{'='*60}")
+                
+                # Crear optimizador específico para esta fase con su LR
+                phase_type = phase_params.get('type', 'text')
+                phase_lr = phase_params.get('lr', 1e-5)
+                phase_num_vision_layers = phase_params.get('num_vision_layers', 1)
+                
+                optimizer_cls = getattr(torch.optim, optimizer_type)
+                optimizer = optimizer_cls(
+                    self.model.model.parameters(),
+                    lr=phase_lr,
+                    weight_decay=weight_decay
+                )
+                logging.info(f"Optimizador {optimizer_type} creado con lr={phase_lr} para fase '{phase_type}'")
+                
+                training_history_phase = self.model.finetune_phase(
+                    phase=phase_type,
+                    optimizer=optimizer,
+                    epochs=phase_params.get('epochs', 5),
+                    warmup_steps=phase_params.get('warmup_steps', 200),
+                    early_stopping=phase_params.get('early_stopping', None),
+                    save_best=phase_params.get('save_best', True),
+                    use_amp=use_amp,
+                    num_vision_layers=phase_num_vision_layers
+                )
+
+                # Guardamos el history de esta fase
+                training_history[phase_name] = training_history_phase
+                logging.info(f"Fase {phase_name} completada")
+                
+            # Guardar resultados del fine-tuning
+            self.results['finetuning'] = {
+                'training_history': training_history,
+            }
+            
         return training_history
     
     def extract_finetuned_embeddings(self) -> torch.Tensor:
@@ -287,13 +363,17 @@ class FineTuningPipeline:
         if self.model is None:
             raise FineTuningPipelineError("Modelo no creado.")
         
-        use_arcface = self.config.get('finetune_criterion') == 'ArcFaceLoss'
-
         logging.info("Extrayendo embeddings post fine-tuning...")
-        
-        finetuned_embeddings = self.model.extract_val_embeddings()
-        finetuned_eval = self.model.evaluate(use_arcface=use_arcface)
-        
+
+        if self.model_type == 'vision':
+            use_arcface = self.config.get('finetune_criterion') == 'ArcFaceLoss'
+            
+            finetuned_embeddings = self.model.extract_val_embeddings()
+            finetuned_eval = self.model.evaluate(use_arcface=use_arcface)
+        else:
+            finetuned_embeddings = self.model.extract_val_embeddings()
+            finetuned_eval = self.model.evaluate()
+            
         # Guardar resultados post fine-tuning
         self.results['finetuned'] = {
             'embeddings_shape': list(finetuned_embeddings.shape),
@@ -484,7 +564,8 @@ class FineTuningPipeline:
 def create_finetuning_pipeline(
     config: Dict[str, Any],
     df: pd.DataFrame,
-    experiment_name: Optional[str] = None
+    experiment_name: Optional[str] = None,
+    model_type: str = 'vision'
 ) -> FineTuningPipeline:
     """
     Función de conveniencia para crear un pipeline de fine-tuning.
@@ -497,4 +578,4 @@ def create_finetuning_pipeline(
     Returns:
         Pipeline de fine-tuning configurado.
     """
-    return FineTuningPipeline(config, df, experiment_name)
+    return FineTuningPipeline(config, df, experiment_name, model_type)

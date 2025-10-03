@@ -92,30 +92,116 @@ class ContrastiveLoss(nn.Module):
     """
     Implementación de Contrastive Loss para embeddings.
     
-    La función de pérdida Contrastive Loss trabaja con pares de embeddings,
-    minimizando la distancia entre pares positivos (misma clase) y maximizando
-    la distancia entre pares negativos (diferentes clases) hasta un margen.
+    Soporta dos modos:
+    1. CLIP mode (clip=True): Trabaja con matrices de similitud (logits) usando CrossEntropyLoss
+       - Cada imagen debe coincidir con su texto correspondiente en el batch (diagonal)
+       - Ground truth son los índices del batch (torch.arange)
+       
+    2. Traditional mode (clip=False): Trabaja con pares de embeddings
+       - Minimiza distancia entre pares positivos (misma clase)
+       - Maximiza distancia entre pares negativos (diferentes clases) hasta un margen
     
-    Loss = (1-Y) * 1/2 * (D^2) + (Y) * 1/2 * max(0, margin-D)^2
+    Loss tradicional = (1-Y) * 1/2 * (D^2) + (Y) * 1/2 * max(0, margin-D)^2
     donde Y=0 para pares positivos, Y=1 para pares negativos
     
+    Loss CLIP = (CrossEntropy(logits_i2t, targets) + CrossEntropy(logits_t2i, targets)) / 2
+    donde targets = torch.arange(batch_size)
+    
     Args:
-        margin: Margen mínimo para pares negativos.
+        margin: Margen mínimo para pares negativos (solo para modo tradicional).
         reduction: Tipo de reducción ('mean', 'sum', 'none').
+        clip: Si usar modo CLIP (logits) o modo tradicional (embeddings).
     
     Example:
-        >>> contrastive_loss = ContrastiveLoss(margin=1.0)
+        >>> # Modo tradicional
+        >>> contrastive_loss = ContrastiveLoss(margin=1.0, clip=False)
         >>> loss = contrastive_loss(embeddings1, embeddings2, labels)
+        >>> 
+        >>> # Modo CLIP
+        >>> contrastive_loss = ContrastiveLoss(clip=True)
+        >>> loss = contrastive_loss(logits_per_image, logits_per_text, None)
     """
     
-    def __init__(self, margin: float = DEFAULT_CONTRASTIVE_MARGIN, reduction: str = 'mean'):
+    def __init__(
+        self, 
+        margin: float = DEFAULT_CONTRASTIVE_MARGIN, 
+        reduction: str = 'mean',
+        clip: bool = True
+    ):
         super(ContrastiveLoss, self).__init__()
         self.margin = margin
         self.reduction = reduction
+        self.clip = clip
     
-    def forward(self, embedding1: torch.Tensor, embedding2: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, 
+        input1: torch.Tensor, 
+        input2: torch.Tensor, 
+        label: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """
         Forward pass de Contrastive Loss.
+        
+        Args:
+            input1: Si clip=True: logits_per_image [batch_size, batch_size]
+                   Si clip=False: embeddings1 [batch_size, embedding_dim]
+            input2: Si clip=True: logits_per_text [batch_size, batch_size]
+                   Si clip=False: embeddings2 [batch_size, embedding_dim]
+            label: Si clip=True: None (usa torch.arange internamente)
+                  Si clip=False: Etiquetas (0=misma clase, 1=diferentes clases) [batch_size]
+            
+        Returns:
+            Pérdida contrastiva calculada.
+        """
+        if self.clip:
+            # Modo CLIP: input1=logits_per_image, input2=logits_per_text
+            return self._clip_contrastive_loss(input1, input2)
+        else:
+            # Modo tradicional: input1=embedding1, input2=embedding2
+            if label is None:
+                raise ValueError("label es requerido para modo tradicional (clip=False)")
+            return self._traditional_contrastive_loss(input1, input2, label)
+    
+    def _clip_contrastive_loss(
+        self,
+        logits_per_image: torch.Tensor,
+        logits_per_text: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Calcula CLIP's contrastive loss.
+        
+        En CLIP, cada imagen debe coincidir con su texto correspondiente en el batch.
+        La diagonal de la matriz de similitud contiene los pares correctos.
+        
+        Args:
+            logits_per_image: Logits de imagen a texto [batch_size, batch_size]
+            logits_per_text: Logits de texto a imagen [batch_size, batch_size]
+            
+        Returns:
+            Pérdida contrastiva promediada en ambas direcciones.
+        """
+        batch_size = logits_per_image.shape[0]
+        
+        # Ground truth: cada imagen coincide con su texto en la misma posición del batch
+        ground_truth = torch.arange(batch_size, dtype=torch.long, device=logits_per_image.device)
+        
+        # CrossEntropy en ambas direcciones
+        loss_i2t = F.cross_entropy(logits_per_image, ground_truth, reduction=self.reduction)
+        loss_t2i = F.cross_entropy(logits_per_text, ground_truth, reduction=self.reduction)
+        
+        # Promediar ambas direcciones
+        loss = (loss_i2t + loss_t2i) / 2.0
+        
+        return loss
+    
+    def _traditional_contrastive_loss(
+        self,
+        embedding1: torch.Tensor,
+        embedding2: torch.Tensor,
+        label: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Calcula contrastive loss tradicional basado en distancia entre embeddings.
         
         Args:
             embedding1: Primer conjunto de embeddings [batch_size, embedding_dim]

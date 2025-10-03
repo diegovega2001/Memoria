@@ -41,13 +41,13 @@ CAR_TYPE_FILE = 'car_type.mat'
 DEFAULT_VIEWS = ['front']
 DEFAULT_SEED = 3
 DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS = 6 
-DEFAULT_P = 8  # Número de clases por batch para contrastive learning
+DEFAULT_P = 32  # Número de clases por batch para contrastive learning
 DEFAULT_K = 4  # Número de muestras por clase en cada batch
 MODEL_TYPES = {'vision', 'textual', 'both'}
 DEFAULT_MODEL_TYPE = 'vision'
 DESCRIPTION_OPTIONS = {'', 'released_year', 'type', 'all'}
 DEFAULT_DESCRIPTION_INCLUDE = ''
-DEFAULT_BATCH_SIZE = 32
+DEFAULT_BATCH_SIZE = 128
 DEFAULT_NUM_WORKERS = 0
 DEFAULT_VERBOSE = True
 UNKNOWN_VALUES = {'unknown', 'Unknown', '', None}
@@ -67,12 +67,52 @@ DEFAULT_ARCFACE_SCALE = 16.0
 DEFAULT_ARCFACE_MARGIN = 0.25
 
 # MyVisionModel
-DEFAULT_MODEL_NAME = 'vit_b_16'
+DEFAULT_MODEL_NAME = 'vit_b_32'
 DEFAULT_WARMUP_EPOCHS = 5
 DEFAULT_WEIGHTS_FILENAME = 'vision_model.pth'
 DEFAULT_WEIGHTS = 'IMAGENET1K_V1'
 DEFAULT_OBJECTIVE = 'metric_learning'
-DEFAULT_PIN_MEMORY = False
+DEFAULT_PIN_MEMORY = True
+
+# MyCLIPModel
+DEFAULT_CLIP_MODEL_NAME = 'clip-vit-base-patch32'
+CLIP_EMBEDDING_MODES = {'image', 'text', 'joint'}
+DEFAULT_CLIP_EMBEDDING_MODE = 'joint'
+CLIP_DEFAULT_FINETUNING_PHASES = {
+    'phase 1': {
+        'type': 'text',
+        'lr': 1e-5,
+        'epochs': 15,
+        'early_stopping': None,
+        'save_best': True,
+        'warmup_steps': 200
+    },
+    'phase 2': {
+        'type': 'projection',
+        'lr': 1e-5,
+        'epochs': 15,
+        'early_stopping': None,
+        'save_best': True,
+        'warmup_steps': 200
+    },
+    'phase 3': {
+        'type': 'vision',
+        'lr': 1e-5,
+        'epochs': 15,
+        'early_stopping': None,
+        'save_best': True,
+        'warmup_steps': 200,
+        'num_vision_layers': 1
+    },
+    'phase 4': {
+        'type': 'projection_refine',
+        'lr': 1e-5,
+        'epochs': 15,
+        'early_stopping': None,
+        'save_best': True,
+        'warmup_steps': 200
+    }
+}
 
 # Dimensionality Reducer
 DEFAULT_DIMENSIONALITY_REDUCER_OPTUNA_TRIALS = 20
@@ -84,13 +124,16 @@ DEFAULT_INCREMENTAL_BATCH_SIZE = 1000
 DEFAULT_CLUSTERING_OPTUNA_TRIALS = 120
 DEFAULT_CLUSTERING_AVAILABLE_METHODS = ['dbscan', 'hdbscan', 'agglomerative', 'optics']
 
-# Finetuning
-DEFAULT_FINETUNE_CRITERION = 'ArcFaceLoss'
+# Vision Finetuning
+DEFAULT_FINETUNE_CRITERION = 'ContrastiveLoss'
 DEFAULT_FINETUNE_OPTIMIZER_TYPE ='AdamW'
-DEFAULT_BACKBONE_LR = 1e-3
-DEFAULT_HEAD_LR = 1e-2
+DEFAULT_BACKBONE_LR = 1e-5
+DEFAULT_HEAD_LR = 1e-5
 DEFAULT_WEIGHT_DECAY = 1e-4
 DEFAULT_USE_SCHEDULER = True
 DEFAULT_USE_EARLY_STOPPING = True
 DEFAULT_PATIENCE = 5
 DEFAULT_FINETUNE_EPOCHS = 50
+
+# AMP
+DEFAULT_USE_AMP = True  

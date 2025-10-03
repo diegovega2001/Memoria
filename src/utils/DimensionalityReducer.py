@@ -131,7 +131,7 @@ class DimensionalityReducer:
         perplexity_max = min(200, n_samples // 3)
         
         return {
-            'n_components': (2, min(10, 50)),  # Hasta 10D para análisis más rico
+            'n_components': (2, 30),  # Hasta 30D para análisis más rico
             'perplexity': (perplexity_min, perplexity_max),
             'learning_rate': (100, 800),  # Rango más amplio para convergencia
             'max_iter': (750, 1500),  # Balance velocidad-calidad
