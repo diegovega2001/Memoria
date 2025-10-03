@@ -36,7 +36,8 @@ from src.defaults import (
     DEFAULT_FINETUNE_CRITERION,
     DEFAULT_FINETUNE_OPTIMIZER_TYPE,
     DEFAULT_FINETUNE_EPOCHS,
-    DEFAULT_WEIGHTS_FILENAME
+    DEFAULT_WEIGHTS_FILENAME,
+    DEFAULT_OUTPUT_EMBEDDING_DIM
 )
 
 
@@ -309,7 +310,7 @@ class MultiViewVisionModel(nn.Module):
             Capa de proyección para embeddings.
         """
         input_dim = self.embedding_dim * self.dataset.num_views
-        output_dim = self.embedding_dim
+        output_dim = DEFAULT_OUTPUT_EMBEDDING_DIM
         
         projection_layer = nn.Sequential(
             nn.Linear(input_dim, output_dim),
@@ -342,12 +343,12 @@ class MultiViewVisionModel(nn.Module):
         """
         
         arcface_layer = ArcFaceLoss(
-            embedding_dim=self.embedding_dim,
+            embedding_dim=DEFAULT_OUTPUT_EMBEDDING_DIM,
             num_classes=self.dataset.num_models,
             scale=scale,
             margin=margin
         )
-        logging.debug(f"Capa ArcFace creada: dim={self.embedding_dim}, clases={self.dataset.num_models}")
+        logging.debug(f"Capa ArcFace creada: dim={DEFAULT_OUTPUT_EMBEDDING_DIM}, clases={self.dataset.num_models}")
         return arcface_layer
     
     def create_triplet_loss(self, margin: float = DEFAULT_TRIPLET_MARGIN) -> TripletLoss:
