@@ -1,9 +1,5 @@
 """
-Módulo de modelo de visión para clasificación de vehículos multi-vista.
-
-Este módulo proporciona una clase para manejar modelos de visión computacional
-pre-entrenados, adaptándolos para clasificación de vehículos con múltiples vistas
-e incluyendo funcionalidades de fine-tuning y extracción de embeddings.
+Módulo para la implementación de Metric Learning en modelos de visión por computadora.
 """
 
 from __future__ import annotations
@@ -16,6 +12,7 @@ from typing import Optional, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 
 from src.defaults import DEFAULT_TRIPLET_MARGIN, DEFAULT_CONTRASTIVE_MARGIN, DEFAULT_ARCFACE_SCALE, DEFAULT_ARCFACE_MARGIN
 
@@ -48,7 +45,6 @@ class TripletLoss(nn.Module):
         >>> triplet_loss = TripletLoss(margin=1.0)
         >>> loss = triplet_loss(anchor_embeddings, positive_embeddings, negative_embeddings)
     """
-    
     def __init__(self, margin: float = DEFAULT_TRIPLET_MARGIN, p: float = 2.0, reduction: str = 'mean'):
         super(TripletLoss, self).__init__()
         self.margin = margin
@@ -66,16 +62,16 @@ class TripletLoss(nn.Module):
             
         Returns:
             Pérdida triplet calculada.
-        """
+        """    
         # Normalizar embeddings para mejor estabilidad
         anchor = F.normalize(anchor, p=2, dim=1)
         positive = F.normalize(positive, p=2, dim=1)
         negative = F.normalize(negative, p=2, dim=1)
-        
+
         # Calcular distancias
         pos_dist = F.pairwise_distance(anchor, positive, p=self.p)
         neg_dist = F.pairwise_distance(anchor, negative, p=self.p)
-        
+
         # Aplicar margen
         loss = F.relu(pos_dist - neg_dist + self.margin)
         
@@ -83,7 +79,7 @@ class TripletLoss(nn.Module):
         if self.reduction == 'mean':
             return loss.mean()
         elif self.reduction == 'sum':
-            return loss.sum()
+            return loss.sum()   
         else:
             return loss
 
@@ -153,6 +149,7 @@ class ContrastiveLoss(nn.Module):
         Returns:
             Pérdida contrastiva calculada.
         """
+
         if self.clip:
             # Modo CLIP: input1=logits_per_image, input2=logits_per_text
             return self._clip_contrastive_loss(input1, input2)
@@ -180,6 +177,7 @@ class ContrastiveLoss(nn.Module):
         Returns:
             Pérdida contrastiva promediada en ambas direcciones.
         """
+
         batch_size = logits_per_image.shape[0]
         
         # Ground truth: cada imagen coincide con su texto en la misma posición del batch
@@ -211,6 +209,7 @@ class ContrastiveLoss(nn.Module):
         Returns:
             Pérdida contrastiva calculada.
         """
+
         # Normalizar embeddings
         embedding1 = F.normalize(embedding1, p=2, dim=1)
         embedding2 = F.normalize(embedding2, p=2, dim=1)
@@ -233,9 +232,9 @@ class ContrastiveLoss(nn.Module):
             return loss
 
 
-class ArcFaceLoss(nn.Module):
+class ArcFaceLayer(nn.Module):
     """
-    Implementación de ArcFace Loss para embeddings de alta calidad.
+    Implementación de ArcFaceLayer para embeddings de alta calidad.
     
     ArcFace mejora la pérdida Softmax tradicional agregando un margen angular
     en el espacio de características, lo que resulta en embeddings más discriminatorios
@@ -265,7 +264,7 @@ class ArcFaceLoss(nn.Module):
         margin: float = DEFAULT_ARCFACE_MARGIN, 
         easy_margin: bool = False
     ):
-        super(ArcFaceLoss, self).__init__()
+        super(ArcFaceLayer, self).__init__()
         self.embedding_dim = embedding_dim
         self.num_classes = num_classes
         self.scale = scale
@@ -284,7 +283,7 @@ class ArcFaceLoss(nn.Module):
     
     def forward(self, embeddings: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass de ArcFace Loss.
+        Forward pass de ArcFaceLayer.
         
         Args:
             embeddings: Embeddings normalizados [batch_size, embedding_dim]
@@ -293,6 +292,7 @@ class ArcFaceLoss(nn.Module):
         Returns:
             Logits con margen angular aplicado [batch_size, num_classes]
         """
+
         # Normalizar embeddings y pesos
         embeddings = F.normalize(embeddings, p=2, dim=1)
         weight = F.normalize(self.weight, p=2, dim=1)
@@ -318,6 +318,7 @@ class ArcFaceLoss(nn.Module):
         logits = logits * self.scale
         
         return logits
+
 
 class ArcFaceInference(nn.Module):
     """
@@ -350,34 +351,31 @@ class ArcFaceInference(nn.Module):
         Returns:
             Logits escalados (batch_size, num_classes).
         """
+
         # Normalizar embeddings
         embeddings_norm = F.normalize(embeddings, p=2, dim=1)
-        
+
         # Normalizar pesos
         weight_norm = F.normalize(self.weight, p=2, dim=0)
-        
+
         # Cosine similarity
         cosine = F.linear(embeddings_norm, weight_norm)
-        
+
         # Escalar
         logits = cosine * self.scale
-        
+
         return logits
     
 
 def create_metric_learning_criterion(
     loss_type: str,
-    embedding_dim: Optional[int] = None,
-    num_classes: Optional[int] = None,
     **kwargs
-) -> Union[TripletLoss, ContrastiveLoss, ArcFaceLoss, nn.CrossEntropyLoss]:
+) -> Union[TripletLoss, ContrastiveLoss, nn.CrossEntropyLoss]:
     """
     Función de conveniencia para crear funciones de pérdida para metric learning.
     
     Args:
-        loss_type: Tipo de pérdida ('triplet', 'contrastive', 'arcface').
-        embedding_dim: Dimensión de embeddings (requerido para ArcFace).
-        num_classes: Número de clases (requerido para ArcFace).
+        loss_type: Tipo de pérdida ('triplet', 'contrastive').
         **kwargs: Argumentos adicionales específicos de cada pérdida.
         
     Returns:
@@ -387,38 +385,19 @@ def create_metric_learning_criterion(
         >>> # Para Triplet Loss
         >>> triplet_criterion = create_metric_learning_criterion('triplet', margin=1.0)
         >>> 
-        >>> # Para ArcFace (retorna ArcFace layer + CrossEntropyLoss)
-        >>> arcface_layer = create_metric_learning_criterion('arcface', 
-        ...                                                 embedding_dim=512, 
-        ...                                                 num_classes=163)
-        >>> ce_loss = nn.CrossEntropyLoss()
+        >>> # Para Contrastive Loss (modo tradicional para vision)
+        >>> contrastive_criterion = create_metric_learning_criterion('contrastive', margin=1.0, clip=False)
+        >>> 
     """
     loss_type_lower = loss_type.lower()
     
     if loss_type_lower in ['tripletloss', 'triplet']:
         margin = kwargs.get('margin', DEFAULT_TRIPLET_MARGIN)
         return TripletLoss(margin=margin)
-        
     elif loss_type_lower in ['contrastiveloss', 'contrastive']:
         margin = kwargs.get('margin', DEFAULT_CONTRASTIVE_MARGIN)
-        return ContrastiveLoss(margin=margin)
-        
-    elif loss_type_lower in ['arcfaceloss', 'arcface']:
-        if embedding_dim is None or num_classes is None:
-            raise ValueError("embedding_dim and num_classes son requeridos para ArcFace")
-        
-        scale = kwargs.get('scale', DEFAULT_ARCFACE_SCALE)
-        margin = kwargs.get('margin', DEFAULT_ARCFACE_MARGIN)
-        easy_margin = kwargs.get('easy_margin', False)
-        
-        return ArcFaceLoss(
-            embedding_dim=embedding_dim,
-            num_classes=num_classes,
-            scale=scale,
-            margin=margin,
-            easy_margin=easy_margin
-        )
-        
+        clip = kwargs.get('clip', False)
+        return ContrastiveLoss(margin=margin, clip=clip)
     else:
         raise ValueError(f"Tipo de pérdida '{loss_type}' no soportado. "
-                        "Use 'triplet', 'contrastive', o 'arcface'.")
+                        "Use 'triplet', 'contrastive'")

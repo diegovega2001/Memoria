@@ -112,14 +112,14 @@ class FineTuningPipeline:
         # Inference transform: SIN augmentación
         val_transform = create_standard_transform(
             size=tuple(self.config.get('image_size', [224, 224])),
-            grayscale=self.config.get('grayscale', False),
-            use_bbox=self.config.get('use_bbox', True),
+            grayscale=self.config.get('grayscale', DEFAULT_GRAYSCALE),
+            use_bbox=self.config.get('use_bbox', DEFAULT_USE_BBOX),
             augment=False
         )
 
         # Determinar si usar IdentitySampler según el objetivo
         objective = self.config.get('objective', DEFAULT_OBJECTIVE)
-        use_identity_sampler = (objective == 'metric_learning')
+        use_identity_sampler = (objective in ['metric_learning', 'ArcFace'])
         
         self.dataset_dict = create_car_dataset(
             df=self.df,
@@ -169,6 +169,7 @@ class FineTuningPipeline:
                 name=f"{self.config.get('model_name', DEFAULT_CLIP_MODEL_NAME)}_{self.experiment_name}",
                 model_name=self.config.get('model_name', DEFAULT_CLIP_MODEL_NAME),
                 device=device,
+                objective=self.config.get('objective', 'CLIP'),
                 dataset_dict=self.dataset_dict,
                 batch_size=self.config.get('batch_size', DEFAULT_BATCH_SIZE),
                 num_workers=self.config.get('num_workers', DEFAULT_NUM_WORKERS),
@@ -185,15 +186,8 @@ class FineTuningPipeline:
             raise FineTuningPipelineError("Modelo no creado. Ejecutar create_model() primero.")
         
         logging.info("Extrayendo embeddings baseline...")
-
-        if self.model_type == 'vision':
-            use_arcface = self.config.get('finetune_criterion') == 'ArcFaceLoss'
-            baseline_embeddings = self.model.extract_val_embeddings()
-            baseline_eval = self.model.evaluate(use_arcface=use_arcface)
-        
-        else:
-            baseline_embeddings = self.model.extract_val_embeddings()
-            baseline_eval = self.model.evaluate()
+        baseline_embeddings = self.model.extract_val_embeddings()
+        baseline_eval = self.model.evaluate()
 
         # Guardar resultados baseline
         self.results['baseline'] = {
@@ -220,10 +214,9 @@ class FineTuningPipeline:
             raise FineTuningPipelineError("Modelo no creado. Ejecutar create_model() primero.")
 
         if self.model_type == 'vision':
-
             # Configurar criterio de pérdida desde config
             criterion_name = self.config.get('finetune_criterion', DEFAULT_FINETUNE_CRITERION)
-            if criterion_name in ['TripletLoss', 'ContrastiveLoss', 'ArcFaceLoss']:
+            if criterion_name in ['TripletLoss', 'ContrastiveLoss']:
                 # Validar que el objetivo sea metric_learning
                 if self.model.objective != 'metric_learning':
                     raise FineTuningPipelineError(
@@ -237,7 +230,7 @@ class FineTuningPipeline:
                 )
             else:
                 # Validar que el objetivo sea classification para criterios estándar
-                if self.model.objective != 'classification':
+                if self.model.objective not in ['classification', 'ArcFace']:
                     logging.warning(
                         f"Usando criterio '{criterion_name}' con objective='{self.model.objective}'. "
                         "Considere usar un criterio de metric learning apropiado."
@@ -259,15 +252,6 @@ class FineTuningPipeline:
                 {"params": self.model.model.parameters(), "lr": base_lr, "weight_decay": weight_decay},
                 {"params": self.model.head_layer.parameters(), "lr": head_lr, "weight_decay": weight_decay}
             ]
-            
-            # Agregar parámetros de arcface_layer si existe
-            if self.model.arcface_layer is not None:
-                optimizer_params.append({
-                    "params": self.model.arcface_layer.parameters(), 
-                    "lr": head_lr, 
-                    "weight_decay": weight_decay
-                })
-                logging.info("Parámetros de arcface_layer agregados al optimizador")
             
             optimizer = optimizer_cls(optimizer_params)
             
@@ -364,15 +348,8 @@ class FineTuningPipeline:
             raise FineTuningPipelineError("Modelo no creado.")
         
         logging.info("Extrayendo embeddings post fine-tuning...")
-
-        if self.model_type == 'vision':
-            use_arcface = self.config.get('finetune_criterion') == 'ArcFaceLoss'
-            
-            finetuned_embeddings = self.model.extract_val_embeddings()
-            finetuned_eval = self.model.evaluate(use_arcface=use_arcface)
-        else:
-            finetuned_embeddings = self.model.extract_val_embeddings()
-            finetuned_eval = self.model.evaluate()
+        finetuned_embeddings = self.model.extract_val_embeddings()
+        finetuned_eval = self.model.evaluate()
             
         # Guardar resultados post fine-tuning
         self.results['finetuned'] = {
@@ -423,8 +400,10 @@ class FineTuningPipeline:
         
         if 'baseline_embeddings' in results_for_json:
             baseline_embeddings = results_for_json.pop('baseline_embeddings')
+
         if 'finetuned_embeddings' in results_for_json:
             finetuned_embeddings = results_for_json.pop('finetuned_embeddings')
+            
         if 'finetuning' in results_for_json and 'training_history' in results_for_json['finetuning']:
             training_history = results_for_json['finetuning']['training_history']
         
@@ -521,7 +500,7 @@ class FineTuningPipeline:
                 f'finetuned_{metric_name}': finetuned_metric,
                 f'{metric_name}_improvement': improvement,
                 'improvement_percentage': improvement_percentage,
-                'objective': self.model.objective
+                'objective': self.model.objective 
             }
             
             # Agregar métricas adicionales para metric_learning

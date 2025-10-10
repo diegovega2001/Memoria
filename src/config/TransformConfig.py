@@ -2,7 +2,7 @@
 Módulo de configuración de transformaciones para imágenes.
 
 Este módulo proporciona una clase para configurar y aplicar transformaciones
-de imágenes usando torchvision, siguiendo las mejores prácticas de Python.
+de imágenes usando torchvision.
 Incluye augmentación agresiva para mejorar la generalización.
 """
 
@@ -17,7 +17,9 @@ from typing import Any, Optional, Tuple, Union
 from torchvision import transforms
 
 from src.defaults import (DEFAULT_COLOR_JITTER_BRIGHTNESS, DEFAULT_COLOR_JITTER_CONTRAST, DEFAULT_COLOR_JITTER_SATURATION, DEFAULT_COLOR_JITTER_HUE, DEFAULT_ROTATION_DEGREES, 
-                          DEFAULT_RANDOM_ERASING_P, DEFAULT_GRAYSCALE, DEFAULT_RESIZE, DEFAULT_NORMALIZE, DEFAULT_USE_BBOX, DEFAULT_AUGMENT)
+                          DEFAULT_RANDOM_ERASING_P, DEFAULT_GRAYSCALE, DEFAULT_RESIZE, DEFAULT_NORMALIZE, DEFAULT_USE_BBOX, DEFAULT_AUGMENT, IMAGENET_MEAN, IMAGENET_STD, 
+                          GRAYSCALE_MEAN, GRAYSCALE_STD)
+
 
 # Configuración de warnings y logging
 warnings.filterwarnings('ignore')
@@ -25,12 +27,6 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-
-# Constantes para normalización ImageNet
-IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STD = [0.229, 0.224, 0.225]
-GRAYSCALE_MEAN = [0.5]
-GRAYSCALE_STD = [0.5]
 
 
 @dataclass
@@ -59,7 +55,6 @@ class TransformConfig:
         >>> bbox = [100, 100, 400, 400]  # [x_min, y_min, x_max, y_max]
         >>> processed_image = config(image, bbox=bbox)
     """
-    
     grayscale: bool = DEFAULT_GRAYSCALE
     resize: Optional[Tuple[int, int]] = DEFAULT_RESIZE
     normalize: bool = DEFAULT_NORMALIZE

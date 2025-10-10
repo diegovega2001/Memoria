@@ -17,7 +17,7 @@ from __future__ import annotations
 # Importar las clases principales del módulo
 from .MyVisionModel import MultiViewVisionModel, VisionModelError, create_vision_model
 from .MyCLIPModel import MultiViewCLIPModel, CLIPModelError, create_clip_model
-from .Criterions import TripletLoss, ContrastiveLoss, ArcFaceLoss, ArcFaceInference, create_metric_learning_criterion
+from .Criterions import TripletLoss, ContrastiveLoss, ArcFaceLayer, ArcFaceInference, create_metric_learning_criterion
 # Definir qué se exporta cuando se hace "from src.models import *"
 __all__ = [
     # Clase base modelo vision
@@ -27,7 +27,7 @@ __all__ = [
     # Clases metric learning
     'TripletLoss',
     'ContrastiveLoss',
-    'ArcFaceLoss',
+    'ArcFaceLayer',
     'ArcFaceInference',
     # Exceptions
     'VisionModelError',

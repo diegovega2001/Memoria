@@ -67,6 +67,14 @@ DEFAULT_ARCFACE_SCALE = 16.0
 DEFAULT_ARCFACE_MARGIN = 0.25
 
 # MyVisionModel
+SUPPORTED_MODEL_ATTRIBUTES = {'fc', 'heads', 'classifier', 'head'}
+MODEL_CONFIGS = {
+    'resnet': {'feature_attr': 'fc', 'feature_key': 'in_features'},
+    'densenet': {'feature_attr': 'classifier', 'feature_key': 'in_features'},
+    'efficientnet': {'feature_attr': 'classifier', 'feature_key': 'in_features'},
+    'vit': {'feature_attr': 'heads', 'feature_key': 'in_features'},
+    'swin': {'feature_attr': 'head', 'feature_key': 'in_features'},
+}
 DEFAULT_MODEL_NAME = 'vit_b_32'
 DEFAULT_WARMUP_EPOCHS = 5
 DEFAULT_WEIGHTS_FILENAME = 'vision_model.pth'
@@ -113,6 +121,12 @@ CLIP_DEFAULT_FINETUNING_PHASES = {
         'warmup_steps': 200
     }
 }
+# Configuraciones conocidas de modelos CLIP
+CLIP_CONFIGS = {
+    'clip-vit-base-patch32': {'model_name': 'openai/clip-vit-base-patch32'},
+    'clip-vit-base-patch16': {'model_name': 'openai/clip-vit-base-patch16'},
+    'clip-vit-large-patch14': {'model_name': 'openai/clip-vit-large-patch14'}
+}
 
 # Dimensionality Reducer
 DEFAULT_DIMENSIONALITY_REDUCER_OPTUNA_TRIALS = 20
@@ -136,4 +150,8 @@ DEFAULT_PATIENCE = 5
 DEFAULT_FINETUNE_EPOCHS = 50
 
 # AMP
-DEFAULT_USE_AMP = True  
+DEFAULT_USE_AMP = True 
+
+# Mensajes de error
+ERROR_INVALID_MODEL_TYPE = "model_type debe ser uno de: {}"
+ERROR_INVALID_DESCRIPTION = "description_include debe ser uno de: {}"

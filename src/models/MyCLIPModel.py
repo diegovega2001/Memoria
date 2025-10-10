@@ -27,6 +27,7 @@ from src.defaults import (
     DEFAULT_PIN_MEMORY, 
     DEFAULT_FINETUNE_EPOCHS,
     DEFAULT_USE_AMP,
+    CLIP_CONFIGS
 )
 
 
@@ -36,14 +37,6 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-
-
-# Configuraciones conocidas de modelos CLIP
-CLIP_CONFIGS = {
-    'clip-vit-base-patch32': {'model_name': 'openai/clip-vit-base-patch32'},
-    'clip-vit-base-patch16': {'model_name': 'openai/clip-vit-base-patch16'},
-    'clip-vit-large-patch14': {'model_name': 'openai/clip-vit-large-patch14'}
-}
 
 
 class CLIPModelError(Exception):
@@ -99,6 +92,7 @@ class MultiViewCLIPModel(nn.Module):
         name: str,
         model_name: str = 'clip-vit-base-patch32',
         device: torch.device = None,
+        objective: str = 'CLIP',
         dataset_dict: dict = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
         num_workers: int = DEFAULT_NUM_WORKERS,
@@ -111,7 +105,7 @@ class MultiViewCLIPModel(nn.Module):
             name: Nombre descriptivo del modelo.
             model_name: Nombre del modelo CLIP (key de CLIP_CONFIGS).
             device: Dispositivo de cómputo.
-            objective: Objetivo del modelo ('classification', 'metric_learning').
+            objective: El objetivo del modelo (Solo CLIP).
             dataset_dict: Diccionario con el dataset y los dataloaders con divisiones train/val/test.
             batch_size: Tamaño de batch.
             num_workers: Número de workers para DataLoaders.
@@ -130,6 +124,7 @@ class MultiViewCLIPModel(nn.Module):
         self.name = name
         self.model_name = model_name
         self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.objective = objective
         self.dataset = dataset_dict['dataset']
         self.train_loader = dataset_dict['train_loader']
         self.val_loader = dataset_dict['val_loader']
@@ -212,7 +207,6 @@ class MultiViewCLIPModel(nn.Module):
             images = images.unsqueeze(1)
 
         B, V, C, H, W = images.shape  # batch, views, channels, height, width
-        
         # Flatten views: [B*V, C, H, W]
         images_reshaped = images.view(B * V, C, H, W)
         # Extract features
@@ -223,6 +217,7 @@ class MultiViewCLIPModel(nn.Module):
         image_embeddings = image_embeddings.mean(dim=1)
         # Normalize
         image_embeddings = image_embeddings / image_embeddings.norm(dim=1, keepdim=True)
+
         return image_embeddings
     
     def extract_text_embeddings(self, texts: List[str]) -> torch.Tensor:
@@ -244,6 +239,7 @@ class MultiViewCLIPModel(nn.Module):
         text_embeddings = self.model.get_text_features(**text_inputs)
         # Normalize
         text_embeddings = text_embeddings / text_embeddings.norm(dim=1, keepdim=True)
+
         return text_embeddings
 
     def extract_joint_embeddings(self, images: torch.Tensor, texts: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -259,6 +255,7 @@ class MultiViewCLIPModel(nn.Module):
         """
         image_embeddings = self.extract_image_embeddings(images=images)
         text_embeddings = self.extract_text_embeddings(texts=texts)
+
         return image_embeddings, text_embeddings
     
     def extract_embeddings(self, dataloader: DataLoader) -> torch.Tensor:
@@ -276,7 +273,7 @@ class MultiViewCLIPModel(nn.Module):
         all_text_embeddings = []
         
         with torch.no_grad():  
-            pbar = tqdm(dataloader, desc="Extrayendo embeddings")
+            pbar = tqdm(dataloader, desc="Extrayendo embeddings", leave=False)
             for batch in pbar:
                 images = batch['images'].to(self.device)  
                 texts = batch['text_description']  
@@ -290,6 +287,7 @@ class MultiViewCLIPModel(nn.Module):
         
         # Combine image and text embeddings side by side
         combined_embeddings = torch.cat([all_image_embeddings, all_text_embeddings], dim=1)
+
         return combined_embeddings
     
     def extract_val_embeddings(self) -> torch.Tensor:
@@ -476,7 +474,7 @@ class MultiViewCLIPModel(nn.Module):
         num_batches = 0
         device_type = 'cuda' if self.device.type == 'cuda' else 'cpu'
         
-        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{total_epochs} [Train]")
+        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{total_epochs} [Train]", leave=False)
         
         for batch in pbar:
             images = batch['images'].to(self.device)
@@ -525,7 +523,7 @@ class MultiViewCLIPModel(nn.Module):
         all_image_embeddings = []
         all_text_embeddings = []
         all_labels = []
-        pbar = tqdm(self.val_loader, desc=f"Epoch {epoch+1}/{total_epochs} [Val]")
+        pbar = tqdm(self.val_loader, desc=f"Epoch {epoch+1}/{total_epochs} [Val]", leave=False)
         
         with torch.no_grad():
             for batch in pbar:
@@ -688,7 +686,7 @@ class MultiViewCLIPModel(nn.Module):
         all_labels = []
         
         with torch.no_grad():
-            for batch in tqdm(dataloader, desc="Evaluando"):
+            for batch in tqdm(dataloader, desc="Evaluando", leave=False):
                 images = batch['images'].to(self.device)
                 texts = batch['text_description']
                 labels = batch['labels'].to(self.device)
@@ -792,6 +790,7 @@ class MultiViewCLIPModel(nn.Module):
     def __str__(self) -> str:
         """Representación string del modelo."""
         info = self.get_model_info()
+
         return (
             f"{self.__class__.__name__}(\n"
             f"  name='{info['name']}',\n"

@@ -16,6 +16,7 @@ import warnings
 import pandas as pd
 import scipy.io
 
+
 # Configuración de warnings y logging
 warnings.filterwarnings('ignore')
 logging.basicConfig(
@@ -23,19 +24,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-# Constantes del dataset
-DEFAULT_VIEWPOINT_FILTER = {1, 2}  # front y rear
-VIEWPOINT_MAPPING = {1: 'front', 2: 'rear', 3: 'side', 4: 'frontside', 5: 'rearside'}
-UNKNOWN_TYPE = 'Unknown'
-DEFAULT_COLUMNS_TO_KEEP = [
-    'image_name', 'image_path', 'released_year', 'viewpoint',
-    'bbox', 'make', 'model', 'type'
-]
-
-# Nombres de archivos del dataset
-ATTRIBUTES_FILE = 'attributes.txt'
-MAKE_MODEL_FILE = 'make_model_name.mat'
-CAR_TYPE_FILE = 'car_type.mat'
+from src.defaults import (DEFAULT_VIEWPOINT_FILTER, VIEWPOINT_MAPPING, UNKNOWN_TYPE, DEFAULT_COLUMNS_TO_KEEP, ATTRIBUTES_FILE, MAKE_MODEL_FILE, CAR_TYPE_FILE)
 
 
 class CompCarsDatasetError(Exception):
@@ -72,7 +61,7 @@ class DataFrameMaker:
         CompCarsDatasetError: Para errores específicos del dataset.
         FileNotFoundError: Si no se encuentran archivos o carpetas requeridos.
     """
-
+    
     def __init__(self, base_path: Union[str, Path]) -> None:
         """
         Inicializa el generador de dataset.
@@ -158,6 +147,7 @@ class DataFrameMaker:
 
         if not make_model_path.exists():
             raise FileNotFoundError(f"Archivo no encontrado: {make_model_path}")
+        
         if not car_type_path.exists():
             raise FileNotFoundError(f"Archivo no encontrado: {car_type_path}")
 

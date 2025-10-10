@@ -99,8 +99,6 @@ class DimensionalityReducer:
         
         logging.info(f"Inicializado con {self.embeddings.shape[0]} muestras, {self.embeddings.shape[1]} características")
         logging.info(f"Usando {self.n_jobs} núcleos de CPU")        
-
-
     
     def _get_pca_params_range(self) -> Dict[str, Tuple[int, int]]:
         """
@@ -131,10 +129,10 @@ class DimensionalityReducer:
         perplexity_max = min(200, n_samples // 3)
         
         return {
-            'n_components': (2, 30),  # Hasta 30D para análisis más rico
+            'n_components': (2, 30),  
             'perplexity': (perplexity_min, perplexity_max),
-            'learning_rate': (100, 800),  # Rango más amplio para convergencia
-            'max_iter': (750, 1500),  # Balance velocidad-calidad
+            'learning_rate': (100, 800),  
+            'max_iter': (750, 1500),  
             'early_exaggeration': (8.0, 20.0)
         }
     
@@ -147,16 +145,16 @@ class DimensionalityReducer:
         """
         n_samples = self.embeddings.shape[0]
         
-        # Vecinos adaptativos: más vecinos preservan mejor la estructura global
+        # Vecinos adaptativos
         neighbors_min = max(10, min(25, n_samples // 80))
         neighbors_max = min(150, n_samples // 8)
         
         return {
             'n_components': (2, min(64, self.embeddings.shape[1] // 2)),
             'n_neighbors': (neighbors_min, neighbors_max),
-            'min_dist': (0.0, 0.4),  # Rango ampliado para explorar más separación
-            'learning_rate': (0.3, 3.0),  # Rango más amplio para convergencia
-            'metric': ['euclidean', 'cosine', 'manhattan']  # Métricas más diversas
+            'min_dist': (0.0, 0.4),  
+            'learning_rate': (0.3, 3.0),  
+            'metric': ['euclidean', 'cosine', 'manhattan'] 
         }
     
     def _create_reducer(self, method: str, params: Dict[str, Any]):
@@ -179,14 +177,12 @@ class DimensionalityReducer:
                 )
             else:
                 return PCA(random_state=self.seed, **params)
-                
         elif method == 'tsne':
             return TSNE(
                 random_state=self.seed,
                 n_jobs=self.n_jobs,
                 **params
             )
-            
         elif method == 'umap':
             return umap.UMAP(
                 random_state=self.seed,
@@ -207,7 +203,6 @@ class DimensionalityReducer:
         Returns:
             Diccionario con los mejores parámetros encontrados
         """
-        
         def objective(trial):
             """Función objetivo para optimización con Optuna."""
             try:
@@ -217,7 +212,6 @@ class DimensionalityReducer:
                     params = {
                         'n_components': trial.suggest_int('n_components', *param_ranges['n_components'])
                     }
-                    
                 elif method == 'tsne':
                     param_ranges = self._get_tsne_params_range()
                     params = {
@@ -227,7 +221,6 @@ class DimensionalityReducer:
                         'max_iter': trial.suggest_int('max_iter', *param_ranges['max_iter']),
                         'early_exaggeration': trial.suggest_float('early_exaggeration', *param_ranges['early_exaggeration'])
                     }
-                    
                 elif method == 'umap':
                     param_ranges = self._get_umap_params_range()
                     params = {

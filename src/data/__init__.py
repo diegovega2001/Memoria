@@ -31,7 +31,6 @@ from .MyDataset import (
     validate_dataset_structure,
 )
 
-# Definir qué se exporta cuando se hace "from src.data import *"
 __all__ = [
     # Classes
     'DataFrameMaker',

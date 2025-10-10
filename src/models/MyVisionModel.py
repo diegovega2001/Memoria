@@ -13,7 +13,7 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from .Criterions import TripletLoss, ContrastiveLoss, ArcFaceLoss, ArcFaceInference
+from .Criterions import TripletLoss, ContrastiveLoss, ArcFaceLayer, ArcFaceInference
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,10 +26,6 @@ from src.defaults import (
     DEFAULT_BATCH_SIZE, 
     DEFAULT_NUM_WORKERS, 
     DEFAULT_WARMUP_EPOCHS, 
-    DEFAULT_TRIPLET_MARGIN, 
-    DEFAULT_CONTRASTIVE_MARGIN, 
-    DEFAULT_ARCFACE_SCALE, 
-    DEFAULT_ARCFACE_MARGIN, 
     DEFAULT_OBJECTIVE, 
     DEFAULT_PIN_MEMORY, 
     DEFAULT_WEIGHTS,
@@ -38,7 +34,9 @@ from src.defaults import (
     DEFAULT_FINETUNE_EPOCHS,
     DEFAULT_WEIGHTS_FILENAME,
     DEFAULT_OUTPUT_EMBEDDING_DIM,
-    DEFAULT_USE_AMP
+    DEFAULT_USE_AMP,
+    SUPPORTED_MODEL_ATTRIBUTES,
+    MODEL_CONFIGS
 )
 
 
@@ -48,17 +46,6 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-
-SUPPORTED_MODEL_ATTRIBUTES = {'fc', 'heads', 'classifier', 'head'}
-
-# Configuraciones conocidas de modelos
-MODEL_CONFIGS = {
-    'resnet': {'feature_attr': 'fc', 'feature_key': 'in_features'},
-    'densenet': {'feature_attr': 'classifier', 'feature_key': 'in_features'},
-    'efficientnet': {'feature_attr': 'classifier', 'feature_key': 'in_features'},
-    'vit': {'feature_attr': 'heads', 'feature_key': 'in_features'},
-    'swin': {'feature_attr': 'head', 'feature_key': 'in_features'},
-}
 
 
 class VisionModelError(Exception):
@@ -83,7 +70,7 @@ class MultiViewVisionModel(nn.Module):
         batch_size: Tamaño de batch para entrenamiento.
         model: Modelo base de torchvision.
         embedding_dim: Dimensión de los embeddings del modelo base.
-        head_layer: Capa final para clasificación o metric learning.
+        head_layer: Capa final para clasificación, metric learning o ArcFace.
         train_loader: DataLoader para entrenamiento.
         val_loader: DataLoader para validación.
         test_loader: DataLoader para prueba.
@@ -162,20 +149,20 @@ class MultiViewVisionModel(nn.Module):
 
         # Inicializar capa adcional según el objetivo
         self.head_layer = None
-        self.arcface_layer = None
         
         if self.objective == 'classification':
             self.head_layer = self._create_classification_layer()
         elif self.objective == 'metric_learning':
             self.head_layer = self._create_embedding_projection()
-            # ArcFace se inicializa solo cuando se usa como criterion, no automáticamente
+        elif self.objective == 'ArcFace':
+            self.head_layer = nn.Sequential(self._create_embedding_projection(),
+                                            self._create_arcface_layer())
         else:
             raise ValueError("objetive debe ser classifcation o metric_learning")
 
         # Mover a dispositivo
         self.model.to(self.device)
         self.head_layer.to(self.device)
-        # arcface_layer se moverá al device cuando se cree (si es necesario)
 
         logging.info(f"Inicializado {self.__class__.__name__}: {self.name}")
         logging.info(f"Modelo base: {self.model_name} con pesos {self.weights}")
@@ -293,7 +280,8 @@ class MultiViewVisionModel(nn.Module):
         # Dimensión de entrada: embedding_dim * número de vistas
         input_dim = self.embedding_dim * self.dataset.num_views
         output_dim = self.dataset.num_models
-
+        
+        # Creación de la capa de clasificación
         classification_layer = nn.Linear(input_dim, output_dim)
         
         # Inicialización Xavier
@@ -310,9 +298,11 @@ class MultiViewVisionModel(nn.Module):
         Returns:
             Capa de proyección para embeddings.
         """
+        # Dimensión de entrada: embedding_dim * número de vistas
         input_dim = self.embedding_dim * self.dataset.num_views
         output_dim = DEFAULT_OUTPUT_EMBEDDING_DIM
         
+        # Creación de la capa de proyección de embeddings 
         projection_layer = nn.Sequential(
             nn.Linear(input_dim, output_dim),
             nn.BatchNorm1d(output_dim),
@@ -322,7 +312,7 @@ class MultiViewVisionModel(nn.Module):
             nn.BatchNorm1d(output_dim)
         )
         
-        # Inicialización
+        # Inicialización Xavier
         for layer in projection_layer:
             if isinstance(layer, nn.Linear):
                 nn.init.xavier_uniform_(layer.weight)
@@ -331,7 +321,7 @@ class MultiViewVisionModel(nn.Module):
         logging.debug(f"Capa de proyección creada: {input_dim} → {output_dim}")
         return projection_layer
 
-    def create_arcface_layer(self, scale: float = DEFAULT_ARCFACE_SCALE, margin: float = DEFAULT_ARCFACE_MARGIN) -> ArcFaceLoss:
+    def _create_arcface_layer(self) -> ArcFaceLayer:
         """
         Crea una capa ArcFace para metric learning
         
@@ -340,42 +330,16 @@ class MultiViewVisionModel(nn.Module):
             margin: Margen angular para ArcFace.
             
         Returns:
-            Instancia de ArcFaceLoss configurada.
+            Instancia de ArcFaceLayer configurada.
         """
         
-        arcface_layer = ArcFaceLoss(
+        # Creación de la capa ArcFace
+        arcface_layer = ArcFaceLayer(
             embedding_dim=DEFAULT_OUTPUT_EMBEDDING_DIM,
             num_classes=self.dataset.num_models,
-            scale=scale,
-            margin=margin
         )
         logging.debug(f"Capa ArcFace creada: dim={DEFAULT_OUTPUT_EMBEDDING_DIM}, clases={self.dataset.num_models}")
         return arcface_layer
-    
-    def create_triplet_loss(self, margin: float = DEFAULT_TRIPLET_MARGIN) -> TripletLoss:
-        """
-        Crea una función de pérdida Triplet.
-        
-        Args:
-            margin: Margen para Triplet Loss.
-            
-        Returns:
-            Instancia de TripletLoss configurada.
-        """
-        return TripletLoss(margin=margin)
-
-    def create_contrastive_loss(self, margin: float = DEFAULT_CONTRASTIVE_MARGIN) -> ContrastiveLoss:
-        """
-        Crea una función de pérdida Contrastive.
-        
-        Args:
-            margin: Margen para Contrastive Loss.
-            
-        Returns:
-            Instancia de ContrastiveLoss configurada.
-        """
-        return ContrastiveLoss(margin=margin, clip=False)
-
 
     def extract_embeddings(
         self,
@@ -405,20 +369,16 @@ class MultiViewVisionModel(nn.Module):
                 iterator = tqdm(dataloader, desc='Extracting embeddings', leave=False) if show_progress else dataloader
                 
                 for batch in iterator:
-                    images = batch['images']
-                    
-                    # Procesar el batch completo (no imagen por imagen)
-                    batch_embeddings = torch.flatten(
-                        self.model(images.to(self.device)), 
-                        start_dim=1
-                    )
-                    
+                    images = batch['images'].to(self.device)
+
+                    # Usar el método forward
+                    batch_embeddings = self.forward(images)
                     embeddings.append(batch_embeddings.cpu())
 
             # Concatenar todos los embeddings
             all_embeddings = torch.cat(embeddings, dim=0)
 
-            # Aplicar escalado si se solicita
+            # Aplicar escalado 
             if apply_scaling:
                 scaler = StandardScaler()
                 scaled_embeddings = scaler.fit_transform(all_embeddings.numpy())
@@ -494,15 +454,6 @@ class MultiViewVisionModel(nn.Module):
             VisionModelError: Si hay errores durante el entrenamiento.
         """
         try:
-            # Asegurar que arcface_layer existe si el criterion es ArcFaceLoss
-            if isinstance(criterion, ArcFaceLoss):
-                if self.arcface_layer is None:
-                    self.arcface_layer = self.create_arcface_layer()
-                    self.arcface_layer.to(self.device)
-                    logging.info("ArcFace layer inicializada para entrenamiento")
-                else:
-                    logging.info("ArcFace layer ya existe, usando la existente")
-            
             # Configuración de entrenamiento
             history = {
                 'train_loss': [], 
@@ -511,12 +462,8 @@ class MultiViewVisionModel(nn.Module):
                 'val_recall@1': [],
                 'val_recall@5': []
             }
-
-            # Para metric learning con Triplet/Contrastive, usamos Recall@1 en vez de accuracy
-            use_recall_for_tracking = (self.objective == 'metric_learning' and 
-                                       not isinstance(criterion, ArcFaceLoss))
             
-            best_val_metric = 0.0
+            best_val_loss = float('inf')
             patience_counter = 0
 
             # Scheduler de warmup si se especifica
@@ -560,14 +507,6 @@ class MultiViewVisionModel(nn.Module):
                 history['val_recall@1'].append(val_recalls[1] if val_recalls else None)
                 history['val_recall@5'].append(val_recalls[5] if val_recalls else None)
 
-                # Determinar métrica de seguimiento según el tipo de entrenamiento
-                if use_recall_for_tracking and val_recalls:
-                    current_metric = val_recalls[1]  # Usar Recall@1
-                    metric_name = 'Recall@1'
-                else:
-                    current_metric = val_accuracy  # Usar accuracy
-                    metric_name = 'Val Acc'
-
                 # Log de progreso
                 log_msg = (
                     f'Epoch {epoch+1}/{epochs} | '
@@ -576,7 +515,7 @@ class MultiViewVisionModel(nn.Module):
                 )
                 
                 # Solo mostrar accuracy si es significativa (classification o ArcFace)
-                if self.objective == 'classification' or isinstance(criterion, ArcFaceLoss):
+                if self.objective in ['classification', 'ArcFace']:
                     log_msg += f' | Val Acc: {val_accuracy:.2f}%'
                 
                 # Mostrar Recall@K para metric learning
@@ -586,21 +525,20 @@ class MultiViewVisionModel(nn.Module):
                 logging.info(log_msg)
 
                 # Guardar mejor modelo
-                if save_best and current_metric > best_val_metric:
-                    best_val_metric = current_metric
+                if save_best and val_loss < best_val_loss:
                     if checkpoint_dir:
-                        self._save_checkpoint(checkpoint_dir, epoch, current_metric, 'best')
+                        self._save_checkpoint(checkpoint_dir, epoch, val_loss, 'best')
 
                 # Early stopping
                 if early_stopping:
-                    if current_metric > best_val_metric - early_stop_min_delta:
+                    if val_loss < best_val_loss - early_stop_min_delta:
                         patience_counter = 0
-                        best_val_metric = current_metric
+                        best_val_loss = val_loss
                     else:
                         patience_counter += 1
 
                     if patience_counter >= early_stop_patience:
-                        logging.info(f"Early stopping triggered at epoch {epoch+1} based on {metric_name}")
+                        logging.info(f"Early stopping triggered at epoch {epoch+1} based on validaton loss")
                         break
 
             logging.info(f"Fine-tuning completado.")
@@ -619,93 +557,10 @@ class MultiViewVisionModel(nn.Module):
             return float(current_epoch + 1) / warmup_epochs if current_epoch < warmup_epochs else 1.0
         
         return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-
-    def _compute_triplet_loss(self, criterion: TripletLoss, embeddings: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        """
-        Calcula Triplet Loss generando triplets de forma online.
-        
-        Args:
-            criterion: Función de pérdida TripletLoss.
-            embeddings: Embeddings del batch.
-            labels: Etiquetas del batch.
-            
-        Returns:
-            Pérdida triplet calculada.
-        """
-        batch_size = embeddings.size(0)
-        if batch_size < 3:
-            # Fallback para batches muy pequeños
-            return torch.tensor(0.0, device=embeddings.device, requires_grad=True)
-        
-        # Generar triplets de forma online (estrategia semi-hard)
-        anchors, positives, negatives = [], [], []
-        
-        for i in range(batch_size):
-            anchor_label = labels[i]
-            
-            # Encontrar índices de positivos y negativos
-            pos_indices = (labels == anchor_label).nonzero(as_tuple=True)[0]
-            neg_indices = (labels != anchor_label).nonzero(as_tuple=True)[0]
-            
-            if len(pos_indices) > 1 and len(neg_indices) > 0:
-                # Seleccionar positivo (diferente del ancla)
-                pos_candidates = pos_indices[pos_indices != i]
-                if len(pos_candidates) > 0:
-                    pos_idx = pos_candidates[torch.randint(len(pos_candidates), (1,))].item()
-                    neg_idx = neg_indices[torch.randint(len(neg_indices), (1,))].item()
-                    
-                    anchors.append(embeddings[i])
-                    positives.append(embeddings[pos_idx])
-                    negatives.append(embeddings[neg_idx])
-        
-        if len(anchors) == 0:
-            return torch.tensor(0.0, device=embeddings.device, requires_grad=True)
-        
-        anchor_batch = torch.stack(anchors)
-        positive_batch = torch.stack(positives)
-        negative_batch = torch.stack(negatives)
-        
-        return criterion(anchor_batch, positive_batch, negative_batch)
-
-    def _compute_contrastive_loss(self, criterion: ContrastiveLoss, embeddings: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        """
-        Calcula Contrastive Loss generando pares de forma online.
-        
-        Args:
-            criterion: Función de pérdida ContrastiveLoss.
-            embeddings: Embeddings del batch.
-            labels: Etiquetas del batch.
-            
-        Returns:
-            Pérdida contrastiva calculada.
-        """
-        batch_size = embeddings.size(0)
-        if batch_size < 2:
-            return torch.tensor(0.0, device=embeddings.device, requires_grad=True)
-        
-        # Generar pares de forma online
-        embeddings1, embeddings2, pair_labels = [], [], []
-        
-        for i in range(batch_size):
-            for j in range(i + 1, batch_size):
-                embeddings1.append(embeddings[i])
-                embeddings2.append(embeddings[j])
-                # Label 0 para misma clase, 1 para diferentes clases
-                pair_labels.append(0 if labels[i] == labels[j] else 1)
-        
-        if len(embeddings1) == 0:
-            return torch.tensor(0.0, device=embeddings.device, requires_grad=True)
-        
-        emb1_batch = torch.stack(embeddings1)
-        emb2_batch = torch.stack(embeddings2)
-        label_batch = torch.tensor(pair_labels, device=embeddings.device, dtype=torch.float)
-        
-        return criterion(emb1_batch, emb2_batch, label_batch)
-
+    
     def _predict_by_similarity(self, embeddings: torch.Tensor) -> torch.Tensor:
         """
         Predice clases usando similitud con centroides de clase.
-        IMPORTANTE: Calcula centroides usando TRAIN_LOADER para evitar data leakage.
         
         Args:
             embeddings: Embeddings a predecir (del val/test loader).
@@ -713,7 +568,7 @@ class MultiViewVisionModel(nn.Module):
         Returns:
             Predicciones basadas en similitud con centroides del conjunto de entrenamiento.
         """
-        # Calcular centroides de clase desde el TRAIN LOADER (no del eval loader)
+        # Calcular centroides de clase desde el train loader
         class_embeddings = {}
         
         self.model.eval()
@@ -722,11 +577,8 @@ class MultiViewVisionModel(nn.Module):
                 images = batch['images'].to(self.device)
                 labels = batch['labels']
                 
-                # Extraer embeddings
-                batch_embeddings = torch.flatten(
-                    self.model(images), 
-                    start_dim=1
-                )
+                # Usar el método forward que maneja múltiples vistas correctamente
+                batch_embeddings = self.forward(images)
                 
                 # Proyectar si es metric_learning
                 if self.objective == 'metric_learning':
@@ -814,36 +666,91 @@ class MultiViewVisionModel(nn.Module):
 
                 optimizer.zero_grad()
 
-                # Forward pass - extraer embeddings
                 with torch.amp.autocast(device_type='cuda' if self.device.type == 'cuda' else 'cpu', enabled=use_amp):
-                # Forward pass - extraer embeddings
-                    embeddings = torch.flatten(
-                        self.model(images.to(self.device)), 
-                        start_dim=1
-                    )  
+                    # Forward pass - extraer embeddings
+                    # Manejar múltiples vistas
+                    if images.ndim == 4:
+                        images = images.unsqueeze(1)
+                    
+                    B, V, C, H, W = images.shape
+                    images_reshaped = images.view(B * V, C, H, W)
+                    features = self.model(images_reshaped)
+                    features = features.view(B, V, -1)
+                    # Concatenar vistas (no promediar) para preservar información
+                    embeddings = features.flatten(start_dim=1)  # [B, V*embedding_dim]  
                 
-                    # Calcular pérdida según el objetivo
+                    # Calcular pérdida y accuracy según el objetivo
                     if self.objective == 'classification':
                         outputs = self.head_layer(embeddings)
                         loss = criterion(outputs, labels)
-                        
+                    elif self.objective == 'ArcFace':
+                        projection_layer, arcface_layer = self.head_layer
+                        embeddings = projection_layer(embeddings)
+                        logits = arcface_layer(embeddings, labels)
+                        loss = criterion(logits, labels)               
                     elif self.objective == 'metric_learning':
                         # Proyectar embeddings a través de head_layer
                         projected_embeddings = self.head_layer(embeddings)
+                
+                        if isinstance(criterion, TripletLoss):
+                            # Para TripletLoss, necesitamos hacer hard negative mining
+                            # Crear tripletas (anchor, positive, negative) del batch
+                            batch_size = projected_embeddings.size(0)
+                            
+                            # Calcular matriz de distancias para mining
+                            dist_matrix = torch.cdist(projected_embeddings, projected_embeddings, p=2)
+                            
+                            anchors, positives, negatives = [], [], []
+                            for i in range(batch_size):
+                                # Mask de muestras de la misma clase (excluyendo el anchor mismo)
+                                pos_mask = (labels == labels[i]) & (torch.arange(batch_size, device=labels.device) != i)
+                                # Mask de muestras de diferente clase
+                                neg_mask = labels != labels[i]
+                                
+                                if pos_mask.any() and neg_mask.any():
+                                    # Hard positive: el más lejano de la misma clase
+                                    hardest_pos_idx = dist_matrix[i][pos_mask].argmax()
+                                    pos_idx = torch.where(pos_mask)[0][hardest_pos_idx]
+                                    
+                                    # Hard negative: el más cercano de diferente clase
+                                    hardest_neg_idx = dist_matrix[i][neg_mask].argmin()
+                                    neg_idx = torch.where(neg_mask)[0][hardest_neg_idx]
+                                    
+                                    anchors.append(projected_embeddings[i])
+                                    positives.append(projected_embeddings[pos_idx])
+                                    negatives.append(projected_embeddings[neg_idx])
+                            
+                            if len(anchors) > 0:
+                                anchor_batch = torch.stack(anchors)
+                                positive_batch = torch.stack(positives)
+                                negative_batch = torch.stack(negatives)
+                                # Usar el forward del criterion directamente
+                                loss = criterion(anchor_batch, positive_batch, negative_batch)
+                            else:
+                                # Si no hay tripletas válidas en este batch
+                                loss = torch.tensor(0.0, device=self.device, requires_grad=True)
                         
-                        if isinstance(criterion, ArcFaceLoss):
-                            # Para ArcFace, usar la capa arcface_layer
-                            logits = self.arcface_layer(projected_embeddings, labels)
-                            loss = F.cross_entropy(logits, labels)
-
-                        elif isinstance(criterion, TripletLoss):
-                            # Para Triplet Loss, necesitamos crear triplets
-                            loss = self._compute_triplet_loss(criterion, projected_embeddings, labels)
-                            
                         elif isinstance(criterion, ContrastiveLoss):
-                            # Para Contrastive Loss, necesitamos crear pares
-                            loss = self._compute_contrastive_loss(criterion, projected_embeddings, labels)
+                            # Para ContrastiveLoss (modo tradicional), crear pares
+                            batch_size = projected_embeddings.size(0)
+                            pairs_1, pairs_2, pair_labels = [], [], []
                             
+                            for i in range(batch_size):
+                                for j in range(i + 1, batch_size):
+                                    pairs_1.append(projected_embeddings[i])
+                                    pairs_2.append(projected_embeddings[j])
+                                    # Label: 0 si misma clase, 1 si diferente clase
+                                    pair_labels.append(0 if labels[i] == labels[j] else 1)
+                            
+                            if len(pairs_1) > 0:
+                                pairs_1_batch = torch.stack(pairs_1)
+                                pairs_2_batch = torch.stack(pairs_2)
+                                pair_labels_batch = torch.tensor(pair_labels, device=self.device, dtype=torch.float)
+                                # Usar el forward del criterion directamente
+                                loss = criterion(pairs_1_batch, pairs_2_batch, pair_labels_batch)
+                            else:
+                                loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+                        
                         else:
                             raise VisionModelError(f"Función de pérdida no soportada para metric_learning.")
                     else:
@@ -887,10 +794,16 @@ class MultiViewVisionModel(nn.Module):
                     labels = batch['labels'].to(self.device)
 
                     # Forward pass - extraer embeddings
-                    embeddings = torch.flatten(
-                        self.model(images.to(self.device)), 
-                        start_dim=1
-                    )
+                    # Manejar múltiples vistas
+                    if images.ndim == 4:
+                        images = images.unsqueeze(1)
+                    
+                    B, V, C, H, W = images.shape
+                    images_reshaped = images.view(B * V, C, H, W)
+                    features = self.model(images_reshaped)
+                    features = features.view(B, V, -1)
+                    # Concatenar vistas (no promediar) para preservar información
+                    embeddings = features.flatten(start_dim=1)  # [B, V*embedding_dim]
                     
                     # Calcular pérdida y accuracy según el objetivo
                     if self.objective == 'classification':
@@ -900,36 +813,72 @@ class MultiViewVisionModel(nn.Module):
                         # Guardar embeddings sin proyección para recalls
                         all_embeddings.append(embeddings.cpu())
                         all_labels.append(labels.cpu())
-
+                    elif self.objective == 'ArcFace':
+                        projection_layer, arcface_layer = self.head_layer
+                        embeddings = projection_layer(embeddings)
+                        logits = arcface_layer(embeddings, labels)
+                        loss = criterion(logits, labels)
+                        # Para accuracy, usar ArcFaceInference 
+                        arcface_inf = ArcFaceInference(
+                            weight=arcface_layer.weight,
+                            scale=arcface_layer.scale
+                        )
+                        inference_logits = arcface_inf(embeddings)
+                        _, predicted = inference_logits.max(1)
                     elif self.objective == 'metric_learning':
                         # Proyectar embeddings a través de head_layer
                         projected_embeddings = self.head_layer(embeddings)
-                        
-                        if isinstance(criterion, ArcFaceLoss):
-                            logits = self.arcface_layer(projected_embeddings, labels)
-                            loss = F.cross_entropy(logits, labels)
                             
-                            # Para accuracy, usar ArcFaceInference (sin margen)
-                            arcface_inf = ArcFaceInference(
-                                weight=self.arcface_layer.weight,
-                                scale=self.arcface_layer.scale
-                            )
-                            inference_logits = arcface_inf(projected_embeddings)
-                            _, predicted = inference_logits.max(1)
+                        if isinstance(criterion, TripletLoss):
+                            # Calcular loss con hard mining 
+                            batch_size = projected_embeddings.size(0)
+                            dist_matrix = torch.cdist(projected_embeddings, projected_embeddings, p=2)
                             
-                        elif isinstance(criterion, TripletLoss):
-                            loss = self._compute_triplet_loss(criterion, projected_embeddings, labels)
-                            # Para triplet/contrastive, no calculamos accuracy tradicional
-                            # La métrica real es Recall@K que se calcula al final
-                            # Usamos un placeholder que no afecta las métricas finales
-                            predicted = torch.zeros_like(labels)  # Placeholder para no inflar accuracy
+                            anchors, positives, negatives = [], [], []
+                            for i in range(batch_size):
+                                pos_mask = (labels == labels[i]) & (torch.arange(batch_size, device=labels.device) != i)
+                                neg_mask = labels != labels[i]
+                                
+                                if pos_mask.any() and neg_mask.any():
+                                    hardest_pos_idx = dist_matrix[i][pos_mask].argmax()
+                                    pos_idx = torch.where(pos_mask)[0][hardest_pos_idx]
+                                    hardest_neg_idx = dist_matrix[i][neg_mask].argmin()
+                                    neg_idx = torch.where(neg_mask)[0][hardest_neg_idx]
+                                    
+                                    anchors.append(projected_embeddings[i])
+                                    positives.append(projected_embeddings[pos_idx])
+                                    negatives.append(projected_embeddings[neg_idx])
+                            
+                            if len(anchors) > 0:
+                                loss = criterion(torch.stack(anchors), torch.stack(positives), torch.stack(negatives))
+                            else:
+                                loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+                            
+                            # Placeholder para accuracy 
+                            predicted = torch.zeros_like(labels)
 
                         elif isinstance(criterion, ContrastiveLoss):
-                            loss = self._compute_contrastive_loss(criterion, projected_embeddings, labels)
-                            # Para triplet/contrastive, no calculamos accuracy tradicional
-                            # La métrica real es Recall@K que se calcula al final
-                            # Usamos un placeholder que no afecta las métricas finales
-                            predicted = torch.zeros_like(labels)  # Placeholder para no inflar accuracy
+                            # Calcular loss con pares 
+                            batch_size = projected_embeddings.size(0)
+                            pairs_1, pairs_2, pair_labels = [], [], []
+                            
+                            for i in range(batch_size):
+                                for j in range(i + 1, batch_size):
+                                    pairs_1.append(projected_embeddings[i])
+                                    pairs_2.append(projected_embeddings[j])
+                                    pair_labels.append(0 if labels[i] == labels[j] else 1)
+                            
+                            if len(pairs_1) > 0:
+                                loss = criterion(
+                                    torch.stack(pairs_1), 
+                                    torch.stack(pairs_2), 
+                                    torch.tensor(pair_labels, device=self.device, dtype=torch.float)
+                                )
+                            else:
+                                loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+                            
+                            # Placeholder para accuracy 
+                            predicted = torch.zeros_like(labels)
                             
                         else:
                             raise VisionModelError(f"Función de pérdida no soportada para metric_learning.")
@@ -951,10 +900,8 @@ class MultiViewVisionModel(nn.Module):
                     pbar.set_postfix({'acc': f'{current_acc:.2f}%'})
 
         avg_loss = total_loss / len(self.val_loader)
-        
-        # Para metric learning (excepto ArcFace), la accuracy no es significativa
-        # ya que no usamos clasificación directa. La métrica real es Recall@K
-        if self.objective == 'metric_learning' and not isinstance(criterion, ArcFaceLoss):
+
+        if self.objective == 'metric_learning':
             accuracy = 0.0  # No significativa para Triplet/Contrastive
         else:
             accuracy = 100 * correct / total_samples
@@ -967,7 +914,7 @@ class MultiViewVisionModel(nn.Module):
 
         return avg_loss, accuracy, recalls
 
-    def evaluate(self, dataloader: Optional[DataLoader] = None, use_similarity: bool = None, use_arcface: bool = False) -> Dict[str, float]:
+    def evaluate(self, dataloader: Optional[DataLoader] = None, use_similarity: bool = None) -> Dict[str, float]:
         """
         Evalúa el modelo en un conjunto de datos.
 
@@ -980,25 +927,17 @@ class MultiViewVisionModel(nn.Module):
         """
         if dataloader is None:
             dataloader = self.val_loader
-        if use_arcface and self.arcface_layer is None:
-            self.arcface_layer = self.create_arcface_layer()
-            self.arcface_layer.to(self.device)
-            logging.info("ArcFace layer inicializada para evaluación")
 
         self.model.eval()
         if self.head_layer is not None:
             self.head_layer.eval()
-        if self.arcface_layer is not None:
-            self.arcface_layer.eval()
 
         all_embeddings = []
         all_labels = []
 
         # Decidir método de predicción
         if use_similarity is None:
-            # Para metric_learning sin ArcFace layer entrenada, usar similitud con centroides
-            # Para classification o ArcFace, usar clasificación directa
-            use_similarity = (self.objective == 'metric_learning') and (self.arcface_layer is None or not any(p.requires_grad for p in self.arcface_layer.parameters()))
+            use_similarity = (self.objective == 'metric_learning')
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc='Evaluating', leave=False):
@@ -1006,15 +945,24 @@ class MultiViewVisionModel(nn.Module):
                 labels = batch['labels'].to(self.device)
 
                 # Extraer embeddings
-                embeddings = torch.flatten(
-                    self.model(images.to(self.device)), 
-                    start_dim=1
-                )
+                # Manejar múltiples vistas
+                if images.ndim == 4:
+                    images = images.unsqueeze(1)
+                
+                B, V, C, H, W = images.shape
+                images_reshaped = images.view(B * V, C, H, W)
+                features = self.model(images_reshaped)
+                features = features.view(B, V, -1)
+                # Concatenar vistas (no promediar) para preservar información
+                embeddings = features.flatten(start_dim=1)  # [B, V*embedding_dim]
                 
                 # Si es metric_learning, proyectar embeddings
                 if self.objective == 'metric_learning':
                     embeddings = self.head_layer(embeddings)
-
+                elif self.objective == 'ArcFace':
+                    projection_layer = self.head_layer[0]
+                    embeddings = projection_layer(embeddings)
+                    
                 all_embeddings.append(embeddings.cpu())
                 all_labels.append(labels.cpu())
 
@@ -1023,7 +971,7 @@ class MultiViewVisionModel(nn.Module):
 
             # Realizar predicción según el método
             if use_similarity:
-                # Metric learning: usar predicción por similitud con centroides del TRAIN SET
+                # Metric learning: usar predicción por similitud con centroides
                 predicted = self._predict_by_similarity(all_embeddings)
                 accuracy = 100.0 * (predicted == all_labels).float().mean().item()
                 
@@ -1035,12 +983,12 @@ class MultiViewVisionModel(nn.Module):
                     'method': 'similarity_centroids_from_train'
                 }
             else:
-                # Clasificación o ArcFace: usar head_layer o arcface inference
-                if self.arcface_layer is not None:
+                if self.objective == 'ArcFace':
                     # Usar ArcFaceInference para predicción sin labels
+                    arcface_layer = self.head_layer[1]
                     arcface_inf = ArcFaceInference(
-                        weight=self.arcface_layer.weight,
-                        scale=self.arcface_layer.scale
+                        weight=arcface_layer.weight,
+                        scale=arcface_layer.scale
                     )
                     logits = arcface_inf(all_embeddings.to(self.device))
                     _, predicted = logits.max(1)
@@ -1061,7 +1009,6 @@ class MultiViewVisionModel(nn.Module):
                     'labels': all_labels.numpy(),
                     'method': 'classification'
                 }
-
 
     def save_model(self, save_path: Union[str, Path], **kwargs) -> None:
         """
@@ -1119,7 +1066,7 @@ class MultiViewVisionModel(nn.Module):
             # Cargar estados
             self.model.load_state_dict(checkpoint['model_state_dict'])
             self.head_layer.load_state_dict(checkpoint['head_layer_state_dict'])
-            
+
             # Verificar compatibilidad
             config = checkpoint.get('model_config', {})
             if config.get('num_classes') != self.dataset.num_models:
@@ -1174,38 +1121,28 @@ class MultiViewVisionModel(nn.Module):
         Raises:
             ValueError: Si el formato de entrada no es soportado.
         """
+        if images.ndim == 4:
+            images = images.unsqueeze(1)
+
+        B, V, C, H, W = images.shape  # batch, views, channels, height, width
+        # Flatten views: [B*V, C, H, W]
+        images_reshaped = images.view(B * V, C, H, W)
+        
         self.model.eval()
 
         with torch.no_grad():
-            if isinstance(images, list):
-                if len(images) > 0 and isinstance(images[0], list):
-                    # Batch de muestras multi-vista
-                    batch_embeddings = []
-                    for views in images:
-                        sample_emb = torch.cat([
-                            torch.flatten(
-                                self.model(img.unsqueeze(0).to(self.device)), 
-                                start_dim=1
-                            )
-                            for img in views
-                        ], dim=1)
-                        batch_embeddings.append(sample_emb)
-                    return torch.cat(batch_embeddings, dim=0)
-                else:
-                    # Muestra individual multi-vista
-                    return torch.cat([
-                        torch.flatten(
-                            self.model(img.unsqueeze(0).to(self.device)), 
-                            start_dim=1
-                        )
-                        for img in images
-                    ], dim=1)
-            elif isinstance(images, torch.Tensor):
-                # Tensor directo
-                return self.model(images.to(self.device))
-            else:
-                raise ValueError(f"Formato de entrada no soportado: {type(images)}")
+            # Extract features
+            embeddings = self.model(images_reshaped)
 
+        # Reshape back: [B, V, D]
+        embeddings = embeddings.view(B, V, -1)
+        # Average views: [B, D]
+        embeddings = embeddings.mean(dim=1)
+        # Normalize
+        embeddings = embeddings / embeddings.norm(dim=1, keepdim=True)
+
+        return embeddings
+    
     def get_model_info(self) -> Dict[str, Any]:
         """
         Obtiene información detallada del modelo.

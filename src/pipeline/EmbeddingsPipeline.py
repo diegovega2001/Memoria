@@ -1,5 +1,5 @@
 """
-Pipeline de análisis de embeddings para modelos de visión.
+Pipeline de análisis de embeddings.
 
 Este módulo proporciona un pipeline enfocado en el análisis y visualización
 de embeddings, incluyendo reducción de dimensionalidad y clustering.
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 import shutil
 import warnings
 import zipfile
@@ -94,7 +95,7 @@ class EmbeddingsPipeline:
             seed=self.config.get('seed', 3),
             transform=transform,
             augment=False,
-            use_identity_sampler=False,  # EmbeddingsPipeline solo necesita labels, no training
+            use_identity_sampler=False, 
             model_type='vision',
             description_include=''
         )
@@ -168,9 +169,7 @@ class EmbeddingsPipeline:
     def load_embeddings_from_zip(
         self,
         zip_path: Union[str, Path]
-    ) -> None:
-        import tempfile
-        
+    ) -> None:        
         logging.info(f"Cargando embeddings desde ZIP: {zip_path}")
         
         zip_path = Path(zip_path)
