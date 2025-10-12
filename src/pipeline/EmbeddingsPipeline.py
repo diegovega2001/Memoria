@@ -82,19 +82,11 @@ class EmbeddingsPipeline:
         """Crea el dataset solo para obtener las etiquetas correctas."""
         logging.info("Creando dataset para obtener etiquetas...")
         
-        transform = create_standard_transform(
-            size=tuple(self.config.get('image_size', [224, 224])),
-            grayscale=self.config.get('grayscale', False),
-            use_bbox=self.config.get('use_bbox', True)
-        )
-        
         self.dataset_dict = create_car_dataset(
             df=self.df,
             views=self.config.get('views', ['front']),
             min_images_for_abundant_class=self.config.get('min_images_for_abundant_class', 5),
             seed=self.config.get('seed', 3),
-            transform=transform,
-            augment=False,
             use_identity_sampler=False, 
             model_type='vision',
             description_include=''
