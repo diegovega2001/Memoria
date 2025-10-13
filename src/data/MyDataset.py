@@ -130,11 +130,6 @@ class CarDataset(Dataset):
 
         # Creación de splits adaptativos
         self._create_adaptive_data_splits()
-
-        logging.info(f"Dataset inicializado: {self.num_models} combinaciones modelo-año válidas")
-        logging.info(f"  - Abundantes: {len(self.abundant_models)}")  
-        logging.info(f"  - Few-shot: {len(self.few_shot_models)}")
-        logging.info(f"  - Single-shot: {len(self.single_shot_models)}")
         logging.info(f"Samples - Train: {len(self.train_samples)}, Val: {len(self.val_samples)}, Test: {len(self.test_samples)}")
 
     def _validate_parameters(
@@ -908,7 +903,7 @@ def robust_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     Raises:
         RuntimeError: Si todas las muestras del batch fallaron.
     """
-    # Filtrar muestras None (que fallaron)
+    # Filtrar muestras None 
     valid_batch = [sample for sample in batch if sample is not None]
     
     if len(valid_batch) == 0:
@@ -1037,13 +1032,6 @@ def create_car_dataset(
     )
     
     logging.info(f"DataLoaders creados:")
-    if use_identity_sampler:
-        logging.info(f"  - Train: {len(train_loader)} batches de tamaño {P}×{K}={effective_batch_size} (IdentitySampler)")
-    else:
-        logging.info(f"  - Train: {len(train_loader)} batches de tamaño {effective_batch_size} (Standard shuffle)")
-    logging.info(f"  - Val: {len(val_loader)} batches de tamaño {batch_size}")
-    logging.info(f"  - Test: {len(test_loader)} batches de tamaño {batch_size}")
-    
     # Log sobre augmentación
     train_has_augment = hasattr(train_transform, 'augment') and train_transform.augment
     val_has_augment = hasattr(val_transform, 'augment') and val_transform.augment

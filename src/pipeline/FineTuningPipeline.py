@@ -95,9 +95,7 @@ class FineTuningPipeline:
         logging.info(f"Inicializado FineTuningPipeline: {self.experiment_name}")
     
     def create_dataset(self) -> None:
-        """Crea el dataset para entrenamiento."""
-        logging.info("Creando dataset...")
-        
+        """Crea el dataset para entrenamiento."""        
         # Crear transformaciones separadas para train y val/test
         augment = self.config.get('augment', DEFAULT_USE_AUGMENT)
         if augment:
@@ -149,7 +147,6 @@ class FineTuningPipeline:
         if self.dataset_dict is None:
             raise FineTuningPipelineError("Dataset no creado. Ejecutar create_dataset() primero.")
         
-        logging.info("Creando modelo...")  
         device = torch.device(self.config.get('device', 'cpu'))
 
         if self.model_type == 'vision':
@@ -341,18 +338,6 @@ class FineTuningPipeline:
             
             # Configurar AMP
             use_amp = self.config.get('use_amp', DEFAULT_USE_AMP)
-            
-            # Logging de configuración
-            logging.info(f"Configuración de entrenamiento:")
-            logging.info(f"  Backbone LR: {base_lr}")
-            logging.info(f"  Head LR: {head_lr}")
-            logging.info(f"  Weight Decay: {weight_decay}")
-            logging.info(f"  Gradient Clip: {gradient_clip_value}")
-            logging.info(f"  Scheduler: {self.config.get('scheduler_type', DEFAULT_SCHEDULER_TYPE) if self.config.get('use_scheduler') else 'None'}")
-            logging.info(f"  Early Stopping: {'Si' if early_stopping else 'No'} (patience={self.config.get('patience', DEFAULT_PATIENCE) if early_stopping else 'N/A'})")
-            logging.info(f"  AMP: {'Si' if use_amp else 'No'}")
-            logging.info(f"  Criterio: {criterion_name}")
-            logging.info(f"  P×K: {self.config.get('P', DEFAULT_P)}×{self.config.get('K', DEFAULT_K)} = {self.config.get('P', DEFAULT_P) * self.config.get('K', DEFAULT_K)} samples/batch")
             
             # Ejecutar fine-tuning
             training_history = self.model.finetune(

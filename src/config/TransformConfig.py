@@ -41,13 +41,13 @@ class TransformConfig:
     
     Attributes:
         grayscale: Si True, convierte la imagen a escala de grises manteniendo
-                  3 canales para compatibilidad con modelos preentrenados.
+            3 canales para compatibilidad con modelos preentrenados.
         resize: Tupla (height, width) para redimensionar la imagen. 
-               Si es None, no se aplica redimensionado.
+            Si es None, no se aplica redimensionado.
         normalize: Si True, aplica normalización usando estadísticas de ImageNet
-                  o valores apropiados para escala de grises.
+            o valores apropiados para escala de grises.
         use_bbox: Si True, permite el uso de bounding boxes para hacer crop.
-                 Requiere que se pase la bbox como parámetro en __call__.
+            Requiere que se pase la bbox como parámetro en __call__.
         augment: Si True, aplica augmentación agresiva (solo para entrenamiento).
     
     Example:
@@ -167,7 +167,7 @@ class TransformConfig:
             Imagen recortada si el bbox es válido, imagen original en caso contrario.
         """
         try:
-            # Validar que tenemos una imagen
+            # Validar imagen
             if image is None:
                 logging.warning("Imagen es None, no se puede aplicar bbox crop")
                 return image
@@ -196,7 +196,7 @@ class TransformConfig:
                 logging.warning(f"Error convirtiendo coordenadas de bbox {bbox}: {e}, usando imagen completa")
                 return image
             
-            # Asegurar que las coordenadas estén dentro de la imagen ANTES de validar orden
+            # Asegurar que las coordenadas estén dentro de la imagen antes de validar orden
             try:
                 img_width, img_height = image.size
             except AttributeError:
@@ -209,7 +209,7 @@ class TransformConfig:
             x_max = max(x_min + 1, min(x_max, img_width))  # Asegurar al menos 1 pixel de ancho
             y_max = max(y_min + 1, min(y_max, img_height))  # Asegurar al menos 1 pixel de alto
             
-            # Validar orden de coordenadas DESPUÉS de ajustar
+            # Validar orden de coordenadas
             if x_min >= x_max or y_min >= y_max:
                 logging.warning(f"Bbox con coordenadas inválidas después de ajustar (min >= max): original={bbox}, ajustado=[{x_min}, {y_min}, {x_max}, {y_max}], usando imagen completa")
                 return image
@@ -248,7 +248,6 @@ class TransformConfig:
         """
         try:
             # Aplicar crop de bounding box si está habilitado y se proporciona
-            # _apply_bbox_crop siempre retorna una imagen válida
             if self.use_bbox and bbox is not None:
                 image = self._apply_bbox_crop(image, bbox)
             
