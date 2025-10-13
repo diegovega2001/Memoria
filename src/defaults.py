@@ -40,22 +40,32 @@ CAR_TYPE_FILE = 'car_type.mat'
 # Constantes del dataset
 DEFAULT_VIEWS = ['front']
 DEFAULT_SEED = 3
-DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS = 6 
+DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS = 7
 DEFAULT_P = 16
-DEFAULT_K = 8
+DEFAULT_K = 4
 MODEL_TYPES = {'vision', 'textual', 'both'}
 DEFAULT_MODEL_TYPE = 'vision'
-DESCRIPTION_OPTIONS = {'', 'released_year', 'type', 'all'}
+DESCRIPTION_OPTIONS = {'', 'released_year', 'type', 'all', 'make_only'}
 DEFAULT_DESCRIPTION_INCLUDE = ''
 DEFAULT_BATCH_SIZE = 128
 DEFAULT_NUM_WORKERS = 0
 DEFAULT_VERBOSE = True
 UNKNOWN_VALUES = {'unknown', 'Unknown', '', None}
 
+CLASS_GRANULARITY_OPTIONS = {'model', 'model+year'}
+DEFAULT_CLASS_GRANULARITY = 'model+year'
+DEFAULT_TEST_UNSEEN_ENABLED = False
+DEFAULT_TEST_UNSEEN_COUNT = 400
+TEST_UNSEEN_STRATEGY_OPTIONS = {'balanced', 'temporal_only', 'random'}
+DEFAULT_TEST_UNSEEN_STRATEGY = 'balanced'
+DEFAULT_TEMPORAL_RATIO = 0.25
+DEFAULT_INTRA_MAKE_RATIO = 0.25
+DEFAULT_INTER_MAKE_RATIO = 0.50
+
 # Configuración fija para muestreo adaptativo
 ADAPTIVE_RATIOS = {
-    'abundant': {'train': 0.8, 'val': 0.1, 'test': 0.1},
-    'few_shot': {'train': 0.7, 'val': 0.15, 'test': 0.15},
+    'abundant': {'train': 0.43, 'val': 0.29, 'test': 0.29},
+    'few_shot': {'train': 0.5, 'val': 0.25, 'test': 0.25},
     'single_shot': {'train': 0.0, 'val': 0.0, 'test': 1.0}  
 }
 
