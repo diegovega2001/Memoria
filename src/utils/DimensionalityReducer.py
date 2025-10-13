@@ -101,60 +101,36 @@ class DimensionalityReducer:
         logging.info(f"Usando {self.n_jobs} núcleos de CPU")        
     
     def _get_pca_params_range(self) -> Dict[str, Tuple[int, int]]:
-        """
-        Define rangos de parámetros para optimización de PCA.
-        
-        Optimizado para preservar estructura de clustering manteniendo
-        suficientes componentes para separabilidad.
-        """
         n_samples, n_features = self.embeddings.shape
         max_possible = min(n_features - 1, n_samples - 1)
-        
-        # Rangos conservadores: preservar más varianza para mejor clustering
-        min_components = max(20, min(50, max_possible // 3))
-        max_components = min(max_possible, max(300, int(n_features * 0.85)))
-        
+        min_components = max(16, min(32, max_possible // 4))
+        max_components = min(max_possible, max(512, int(n_features * 0.9)))
         return {'n_components': (min_components, max_components)}
     
     def _get_tsne_params_range(self) -> Dict[str, Tuple]:
-        """
-        Define rangos de parámetros para optimización de t-SNE.
-        
-        Enfocado en calidad de clustering con balance entre velocidad y calidad.
-        """
-        n_samples = self.embeddings.shape[0]
-        
-        # Perplexity adaptativo al tamaño del dataset
-        perplexity_min = max(15, min(30, n_samples // 80))
-        perplexity_max = min(200, n_samples // 3)
-        
+        n_samples = len(self.embeddings)
+        max_perplexity = min(100, (n_samples - 1) // 3)
+        min_perplexity = max(5, min(10, n_samples // 150))
         return {
-            'n_components': (2, 30),  
-            'perplexity': (perplexity_min, perplexity_max),
-            'learning_rate': (100, 800),  
-            'max_iter': (750, 1500),  
-            'early_exaggeration': (8.0, 20.0)
+            'n_components': (2, 3),
+            'perplexity': (min_perplexity, max_perplexity),
+            'learning_rate': (10.0, 1000.0),
+            'max_iter': (500, 3000),
+            'early_exaggeration': (4.0, 36.0)
         }
     
     def _get_umap_params_range(self) -> Dict[str, Tuple]:
-        """
-        Define rangos de parámetros para optimización de UMAP.
-        
-        Optimizado para preservar estructura global necesaria para clustering
-        manteniendo eficiencia computacional.
-        """
-        n_samples = self.embeddings.shape[0]
-        
-        # Vecinos adaptativos
-        neighbors_min = max(10, min(25, n_samples // 80))
-        neighbors_max = min(150, n_samples // 8)
-        
+        n_samples = len(self.embeddings)
+        max_neighbors = min(300, n_samples - 1)
+        min_neighbors = max(5, min(10, n_samples // 100))
         return {
-            'n_components': (2, min(64, self.embeddings.shape[1] // 2)),
-            'n_neighbors': (neighbors_min, neighbors_max),
-            'min_dist': (0.0, 0.4),  
-            'learning_rate': (0.3, 3.0),  
-            'metric': ['euclidean', 'cosine', 'manhattan'] 
+            'n_components': (2, 50),
+            'n_neighbors': (min_neighbors, max_neighbors),
+            'min_dist': (0.0, 0.8),
+            'metric': ['euclidean', 'cosine', 'manhattan'],
+            'n_epochs': (200, 1500),
+            'learning_rate': (0.1, 3.0),
+            'negative_sample_rate': (2, 15)
         }
     
     def _create_reducer(self, method: str, params: Dict[str, Any]):
@@ -206,7 +182,6 @@ class DimensionalityReducer:
         def objective(trial):
             """Función objetivo para optimización con Optuna."""
             try:
-                # Definir parámetros según el método
                 if method == 'pca':
                     param_ranges = self._get_pca_params_range()
                     params = {
@@ -217,7 +192,7 @@ class DimensionalityReducer:
                     params = {
                         'n_components': trial.suggest_int('n_components', *param_ranges['n_components']),
                         'perplexity': trial.suggest_int('perplexity', *param_ranges['perplexity']),
-                        'learning_rate': trial.suggest_float('learning_rate', *param_ranges['learning_rate']),
+                        'learning_rate': trial.suggest_float('learning_rate', *param_ranges['learning_rate'], log=True),
                         'max_iter': trial.suggest_int('max_iter', *param_ranges['max_iter']),
                         'early_exaggeration': trial.suggest_float('early_exaggeration', *param_ranges['early_exaggeration'])
                     }
@@ -228,70 +203,72 @@ class DimensionalityReducer:
                         'n_neighbors': trial.suggest_int('n_neighbors', *param_ranges['n_neighbors']),
                         'min_dist': trial.suggest_float('min_dist', *param_ranges['min_dist']),
                         'learning_rate': trial.suggest_float('learning_rate', *param_ranges['learning_rate']),
-                        'metric': trial.suggest_categorical('metric', param_ranges['metric'])
+                        'metric': trial.suggest_categorical('metric', param_ranges['metric']),
+                        'n_epochs': trial.suggest_int('n_epochs', *param_ranges['n_epochs']),
+                        'negative_sample_rate': trial.suggest_int('negative_sample_rate', *param_ranges['negative_sample_rate'])
                     }
                 else:
-                    raise ValueError(f"Método no soportado: {method}")
+                    raise ValueError(f"Unsupported method: {method}")
                 
-                # Crear reductor y aplicar transformación
                 reducer = self._create_reducer(method, params)
                 reduced_embeddings = reducer.fit_transform(self.embeddings)
                 
-                # Función objetivo enfocada en clustering de embeddings
+                if reduced_embeddings.shape[0] < 2:
+                    return -1.0
+                
                 silhouette_val = silhouette_score(reduced_embeddings, self.labels)
                 
-                if method in ['umap', 'tsne']:  # Métodos no lineales
-                    # Para métodos no lineales, balancear separabilidad y preservación
-                    trust_val = trustworthiness(self.embeddings, reduced_embeddings, n_neighbors=5)
+                if method in ['umap', 'tsne']:
+                    trust_val = trustworthiness(self.embeddings, reduced_embeddings, n_neighbors=min(5, len(self.embeddings) - 1))
                     silhouette_norm = (silhouette_val + 1) / 2
-                    # 75% separabilidad + 25% preservación de estructura
-                    combined_score = 0.75 * silhouette_norm + 0.25 * trust_val
-                else:  # PCA
-                    # Para PCA, solo usar silhouette (ya preserva estructura linealmente)
+                    combined_score = 0.7 * silhouette_norm + 0.3 * trust_val
+                else:
                     combined_score = (silhouette_val + 1) / 2
                 
-                # Limpieza de memoria
                 del reducer, reduced_embeddings
                 gc.collect()
                 
                 return combined_score
                 
             except Exception as e:
-                logging.warning(f"Trial falló para {method}: {e}")
+                logging.debug(f"Trial failed for {method}: {e}")
                 return -1.0
         
-        # Configurar sampler optimizado para eficiencia
         sampler = optuna.samplers.TPESampler(
             seed=self.seed,
-            n_startup_trials=max(3, min(8, self.optimizer_trials // 4)),
+            n_startup_trials=max(10, self.optimizer_trials // 5),
             multivariate=True,
-            constant_liar=True  # Mejora paralelización
+            constant_liar=True
         )
         
-        # Crear estudio con pruner agresivo
         study = optuna.create_study(
             direction='maximize',
             sampler=sampler,
-            pruner=optuna.pruners.HyperbandPruner(
-                min_resource=3,  # Mínimo de evaluaciones antes de podar
-                max_resource=self.optimizer_trials,
-                reduction_factor=3
+            pruner=optuna.pruners.MedianPruner(
+                n_startup_trials=8,
+                n_warmup_steps=12
             )
         )
         
         try:
-            study.optimize(
-                objective,
-                n_trials=self.optimizer_trials,
-                show_progress_bar=True
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                study.optimize(
+                    objective,
+                    n_trials=self.optimizer_trials,
+                    show_progress_bar=False,
+                    catch=(Exception,)
+                )
         except KeyboardInterrupt:
-            logging.info("Optimización interrumpida por el usuario")
-            
-        logging.info(f"Optimización completada para {method}. Mejor valor: {study.best_value:.4f}")
-        logging.info(f"Mejores parámetros para {method}: {study.best_params}")
+            logging.info(f"Optimization interrupted for {method}")
         
-        return study.best_params
+        if study.best_value > 0:
+            logging.info(f"{method.upper()} optimization: Best score {study.best_value:.4f}")
+            logging.info(f"Best parameters: {study.best_params}")
+        else:
+            logging.warning(f"No valid parameters found for {method}")
+        
+        return study.best_params if study.best_value > 0 else {}
     
     def reduce(self, method: str, params: Dict[str, Any] = None) -> np.ndarray:
         """

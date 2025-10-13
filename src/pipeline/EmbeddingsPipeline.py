@@ -377,7 +377,7 @@ class EmbeddingsPipeline:
             )
         }
         
-        if baseline_clustering and finetuned_clustering:
+        if  baseline_clustering and finetuned_clustering:
             baseline_best = max(baseline_clustering, key=lambda x: x.get('adjusted_rand_score', 0))
             finetuned_best = max(finetuned_clustering, key=lambda x: x.get('adjusted_rand_score', 0))
             
@@ -463,57 +463,281 @@ class EmbeddingsPipeline:
         logging.info(f"Resultados guardados en ZIP: {zip_path}")
         return zip_path
     
-    def run_full_analysis_from_zip(self, zip_path: Union[str, Path]) -> Dict[str, Any]:
-        logging.info(f"=== INICIANDO ANÁLISIS DESDE ZIP: {self.experiment_name} ===")
+    def run_baseline_analysis_from_zip(self, zip_path: Union[str, Path]) -> Dict[str, Any]:
+        logging.info(f"=== ANÁLISIS BASELINE DESDE ZIP: {self.experiment_name} ===")
         
         try:
             self.create_dataset_for_labels()
             self.load_embeddings_from_zip(zip_path)
             self.analyze_baseline_embeddings()
             
-            if self.finetuned_embeddings is not None:
-                self.analyze_finetuned_embeddings()
-                self.compare_results()
-            
             zip_result_path = self.save_results()
             self.results['saved_to'] = str(zip_result_path)
             
-            logging.info(f"=== ANÁLISIS COMPLETO COMPLETADO ===")
+            logging.info(f"=== ANÁLISIS BASELINE COMPLETADO ===")
             logging.info(f"Resultados guardados en: {zip_result_path}")
             return self.results
             
         except Exception as e:
-            logging.error(f"Error en análisis: {e}")
+            logging.error(f"Error en análisis baseline: {e}")
             self.results['error'] = str(e)
-            raise EmbeddingsPipelineError(f"Error ejecutando análisis: {e}") from e
+            raise EmbeddingsPipelineError(f"Error en análisis baseline: {e}") from e
+    
+    def run_finetuned_analysis_from_zip(self, zip_path: Union[str, Path]) -> Dict[str, Any]:
+        logging.info(f"=== ANÁLISIS FINETUNED DESDE ZIP: {self.experiment_name} ===")
+        
+        try:
+            if self.baseline_labels is None:
+                self.create_dataset_for_labels()
+            
+            self.load_embeddings_from_zip(zip_path)
+            
+            if self.finetuned_embeddings is None:
+                raise EmbeddingsPipelineError("No se encontraron embeddings finetuned en el ZIP")
+            
+            self.analyze_finetuned_embeddings()
+            
+            zip_result_path = self.save_results()
+            self.results['saved_to'] = str(zip_result_path)
+            
+            logging.info(f"=== ANÁLISIS FINETUNED COMPLETADO ===")
+            logging.info(f"Resultados guardados en: {zip_result_path}")
+            return self.results
+            
+        except Exception as e:
+            logging.error(f"Error en análisis finetuned: {e}")
+            self.results['error'] = str(e)
+            raise EmbeddingsPipelineError(f"Error en análisis finetuned: {e}") from e
+    
+    def run_comparative_analysis_from_zip(self, zip_path: Union[str, Path]) -> Dict[str, Any]:
+        logging.info(f"=== ANÁLISIS COMPARATIVO DESDE ZIP: {self.experiment_name} ===")
+        
+        try:
+            self.create_dataset_for_labels()
+            self.load_embeddings_from_zip(zip_path)
+            
+            if self.finetuned_embeddings is None:
+                raise EmbeddingsPipelineError("Se requieren embeddings finetuned para comparación")
+            
+            self.analyze_baseline_embeddings()
+            self.analyze_finetuned_embeddings()
+            self.compare_results()
+            
+            zip_result_path = self.save_results()
+            self.results['saved_to'] = str(zip_result_path)
+            
+            logging.info(f"=== ANÁLISIS COMPARATIVO COMPLETADO ===")
+            logging.info(f"Resultados guardados en: {zip_result_path}")
+            return self.results
+            
+        except Exception as e:
+            logging.error(f"Error en análisis comparativo: {e}")
+            self.results['error'] = str(e)
+            raise EmbeddingsPipelineError(f"Error en análisis comparativo: {e}") from e
+    
+    def run_full_analysis_from_zip(self, zip_path: Union[str, Path]) -> Dict[str, Any]:
+        return self.run_comparative_analysis_from_zip(zip_path)
+    
+    def run_baseline_analysis_from_files(self, baseline_embeddings_path: Union[str, Path]) -> Dict[str, Any]:
+        logging.info(f"=== ANÁLISIS BASELINE DESDE ARCHIVOS: {self.experiment_name} ===")
+        
+        try:
+            self.create_dataset_for_labels()
+            self.load_embeddings_from_files(baseline_embeddings_path, None)
+            self.analyze_baseline_embeddings()
+            
+            zip_result_path = self.save_results()
+            self.results['saved_to'] = str(zip_result_path)
+            
+            logging.info(f"=== ANÁLISIS BASELINE COMPLETADO ===")
+            logging.info(f"Resultados guardados en: {zip_result_path}")
+            return self.results
+            
+        except Exception as e:
+            logging.error(f"Error en análisis baseline: {e}")
+            self.results['error'] = str(e)
+            raise EmbeddingsPipelineError(f"Error en análisis baseline: {e}") from e
+    
+    def run_finetuned_analysis_from_files(self, finetuned_embeddings_path: Union[str, Path]) -> Dict[str, Any]:
+        logging.info(f"=== ANÁLISIS FINETUNED DESDE ARCHIVOS: {self.experiment_name} ===")
+        
+        try:
+            if self.baseline_labels is None:
+                self.create_dataset_for_labels()
+            
+            baseline_path = Path(finetuned_embeddings_path).parent / "baseline_embeddings.pt"
+            if not baseline_path.exists():
+                raise EmbeddingsPipelineError(f"Embeddings baseline no encontrados en {baseline_path}")
+            
+            self.load_embeddings_from_files(baseline_path, finetuned_embeddings_path)
+            self.analyze_finetuned_embeddings()
+            
+            zip_result_path = self.save_results()
+            self.results['saved_to'] = str(zip_result_path)
+            
+            logging.info(f"=== ANÁLISIS FINETUNED COMPLETADO ===")
+            logging.info(f"Resultados guardados en: {zip_result_path}")
+            return self.results
+            
+        except Exception as e:
+            logging.error(f"Error en análisis finetuned: {e}")
+            self.results['error'] = str(e)
+            raise EmbeddingsPipelineError(f"Error en análisis finetuned: {e}") from e
+    
+    def run_comparative_analysis_from_files(
+        self,
+        baseline_embeddings_path: Union[str, Path],
+        finetuned_embeddings_path: Union[str, Path]
+    ) -> Dict[str, Any]:
+        logging.info(f"=== ANÁLISIS COMPARATIVO DESDE ARCHIVOS: {self.experiment_name} ===")
+        
+        try:
+            self.create_dataset_for_labels()
+            self.load_embeddings_from_files(baseline_embeddings_path, finetuned_embeddings_path)
+            self.analyze_baseline_embeddings()
+            self.analyze_finetuned_embeddings()
+            self.compare_results()
+            
+            zip_result_path = self.save_results()
+            self.results['saved_to'] = str(zip_result_path)
+            
+            logging.info(f"=== ANÁLISIS COMPARATIVO COMPLETADO ===")
+            logging.info(f"Resultados guardados en: {zip_result_path}")
+            return self.results
+            
+        except Exception as e:
+            logging.error(f"Error en análisis comparativo: {e}")
+            self.results['error'] = str(e)
+            raise EmbeddingsPipelineError(f"Error en análisis comparativo: {e}") from e
     
     def run_full_analysis_from_files(
         self,
         baseline_embeddings_path: Union[str, Path],
         finetuned_embeddings_path: Optional[Union[str, Path]] = None
     ) -> Dict[str, Any]:
-        logging.info(f"=== INICIANDO ANÁLISIS DESDE ARCHIVOS: {self.experiment_name} ===")
+        if finetuned_embeddings_path is None:
+            return self.run_baseline_analysis_from_files(baseline_embeddings_path)
+        else:
+            return self.run_comparative_analysis_from_files(baseline_embeddings_path, finetuned_embeddings_path)
+    
+    def load_results_from_zip(self, zip_path: Union[str, Path]) -> Dict[str, Any]:
+        logging.info(f"Cargando resultados desde ZIP: {zip_path}")
+        
+        zip_path = Path(zip_path)
+        if not zip_path.exists():
+            raise EmbeddingsPipelineError(f"Archivo ZIP no encontrado: {zip_path}")
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(temp_path)
+            
+            results_files = list(temp_path.rglob("results.json"))
+            
+            if not results_files:
+                raise EmbeddingsPipelineError("No se encontró results.json en el ZIP")
+            
+            with open(results_files[0], 'r') as f:
+                loaded_results = json.load(f)
+            
+            logging.info(f"Resultados cargados correctamente desde: {zip_path}")
+            return loaded_results
+    
+    def compare_saved_results(
+        self,
+        baseline_zip_path: Union[str, Path],
+        finetuned_zip_path: Union[str, Path],
+        save_comparison: bool = True
+    ) -> Dict[str, Any]:
+        logging.info(f"=== COMPARACIÓN DE RESULTADOS GUARDADOS ===")
+        logging.info(f"Baseline: {baseline_zip_path}")
+        logging.info(f"Finetuned: {finetuned_zip_path}")
         
         try:
-            self.create_dataset_for_labels()
-            self.load_embeddings_from_files(baseline_embeddings_path, finetuned_embeddings_path)
-            self.analyze_baseline_embeddings()
+            baseline_results = self.load_results_from_zip(baseline_zip_path)
+            finetuned_results = self.load_results_from_zip(finetuned_zip_path)
             
-            if self.finetuned_embeddings is not None:
-                self.analyze_finetuned_embeddings()
-                self.compare_results()
+            if 'baseline_analysis' not in baseline_results:
+                raise EmbeddingsPipelineError("El ZIP baseline no contiene análisis baseline")
             
-            zip_result_path = self.save_results()
-            self.results['saved_to'] = str(zip_result_path)
+            if 'finetuned_analysis' not in finetuned_results:
+                raise EmbeddingsPipelineError("El ZIP finetuned no contiene análisis finetuned")
             
-            logging.info(f"=== ANÁLISIS COMPLETO COMPLETADO ===")
-            logging.info(f"Resultados guardados en: {zip_result_path}")
-            return self.results
+            baseline_analysis = baseline_results['baseline_analysis']
+            finetuned_analysis = finetuned_results['finetuned_analysis']
+            
+            comparison = {
+                'baseline_zip': str(baseline_zip_path),
+                'finetuned_zip': str(finetuned_zip_path),
+                'comparison_timestamp': datetime.now().isoformat(),
+                'reduction_methods': {
+                    'baseline_best': baseline_analysis['reduction']['best_method'],
+                    'finetuned_best': finetuned_analysis['reduction']['best_method']
+                },
+                'clustering_methods': {
+                    'baseline_best': baseline_analysis['clustering']['best_method'],
+                    'finetuned_best': finetuned_analysis['clustering']['best_method']
+                }
+            }
+            
+            baseline_clustering = baseline_analysis['clustering']['comparison_df']
+            finetuned_clustering = finetuned_analysis['clustering']['comparison_df']
+            
+            comparison['clustering_metrics_comparison'] = self._compare_clustering_metrics(
+                baseline_clustering, finetuned_clustering
+            )
+            
+            if baseline_clustering and finetuned_clustering:
+                baseline_best = max(baseline_clustering, key=lambda x: x.get('adjusted_rand_score', 0))
+                finetuned_best = max(finetuned_clustering, key=lambda x: x.get('adjusted_rand_score', 0))
+                
+                comparison['performance_improvement'] = {
+                    'baseline_ari': baseline_best.get('adjusted_rand_score', 0),
+                    'finetuned_ari': finetuned_best.get('adjusted_rand_score', 0),
+                    'ari_improvement': finetuned_best.get('adjusted_rand_score', 0) - baseline_best.get('adjusted_rand_score', 0),
+                    'baseline_silhouette': baseline_best.get('silhouette_score', 0),
+                    'finetuned_silhouette': finetuned_best.get('silhouette_score', 0),
+                    'silhouette_improvement': finetuned_best.get('silhouette_score', 0) - baseline_best.get('silhouette_score', 0),
+                    'baseline_nmi': baseline_best.get('normalized_mutual_info', 0),
+                    'finetuned_nmi': finetuned_best.get('normalized_mutual_info', 0),
+                    'nmi_improvement': finetuned_best.get('normalized_mutual_info', 0) - baseline_best.get('normalized_mutual_info', 0)
+                }
+            
+            logging.info("\n" + "="*80)
+            logging.info("RESUMEN DE COMPARACIÓN")
+            logging.info("="*80)
+            logging.info(f"Mejor método baseline: {comparison['clustering_methods']['baseline_best']}")
+            logging.info(f"Mejor método finetuned: {comparison['clustering_methods']['finetuned_best']}")
+            
+            if 'performance_improvement' in comparison:
+                perf = comparison['performance_improvement']
+                logging.info(f"\nMEJORAS EN RENDIMIENTO:")
+                logging.info(f"  ARI: {perf['baseline_ari']:.4f} → {perf['finetuned_ari']:.4f} (Δ {perf['ari_improvement']:+.4f})")
+                logging.info(f"  Silhouette: {perf['baseline_silhouette']:.4f} → {perf['finetuned_silhouette']:.4f} (Δ {perf['silhouette_improvement']:+.4f})")
+                logging.info(f"  NMI: {perf['baseline_nmi']:.4f} → {perf['finetuned_nmi']:.4f} (Δ {perf['nmi_improvement']:+.4f})")
+            logging.info("="*80 + "\n")
+            
+            if save_comparison:
+                comparison_name = f"comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                save_dir = Path("results")
+                save_dir.mkdir(parents=True, exist_ok=True)
+                
+                comparison_path = save_dir / f"{comparison_name}.json"
+                safe_json_dump(comparison, comparison_path)
+                logging.info(f"Comparación guardada en: {comparison_path}")
+                
+                if 'performance_improvement' in comparison:
+                    comparison_df = pd.DataFrame([comparison['performance_improvement']])
+                    csv_path = save_dir / f"{comparison_name}.csv"
+                    comparison_df.to_csv(csv_path, index=False)
+                    logging.info(f"CSV de mejoras guardado en: {csv_path}")
+            
+            return comparison
             
         except Exception as e:
-            logging.error(f"Error en análisis: {e}")
-            self.results['error'] = str(e)
-            raise EmbeddingsPipelineError(f"Error ejecutando análisis: {e}") from e
+            logging.error(f"Error comparando resultados: {e}")
+            raise EmbeddingsPipelineError(f"Error en comparación de resultados: {e}") from e
     
     def __str__(self) -> str:
         return f"EmbeddingsPipeline(experiment={self.experiment_name})"

@@ -92,37 +92,43 @@ class TransformConfig:
         if self.resize is not None:
             transform_list.append(transforms.Resize(self.resize))
         
-        # Augmentación Agresiva
+        # Augmentación 
         if self.augment:
             transform_list.extend([
-                # Random horizontal flip (50% probabilidad)
-                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomHorizontalFlip(p=0.3),
                 
-                # Random rotation (±5 grados)
-                transforms.RandomRotation(
-                    degrees=DEFAULT_ROTATION_DEGREES,
-                    interpolation=transforms.InterpolationMode.BILINEAR
-                ),
+                transforms.RandomApply([
+                    transforms.RandomRotation(
+                        degrees=DEFAULT_ROTATION_DEGREES,
+                        interpolation=transforms.InterpolationMode.BILINEAR
+                    )
+                ], p=0.3),
                 
-                # Random affine (zoom, traslación)
-                transforms.RandomAffine(
-                    degrees=0,  # Ya tenemos rotación arriba
-                    translate=(0.05, 0.05),  # ±0.05% traslación
-                    scale=(0.95, 1.05),  # 95%-115% zoom
-                    shear=None,
-                    interpolation=transforms.InterpolationMode.BILINEAR
-                ),
+                transforms.RandomApply([
+                    transforms.RandomAffine(
+                        degrees=0,
+                        translate=(0.03, 0.03),
+                        scale=(0.97, 1.03),
+                        shear=None,
+                        interpolation=transforms.InterpolationMode.BILINEAR
+                    )
+                ], p=0.3),
                 
-                # Color jitter (brillo, contraste, saturación, hue)
-                transforms.ColorJitter(
-                    brightness=DEFAULT_COLOR_JITTER_BRIGHTNESS,
-                    contrast=DEFAULT_COLOR_JITTER_CONTRAST,
-                    saturation=DEFAULT_COLOR_JITTER_SATURATION,
-                    hue=DEFAULT_COLOR_JITTER_HUE
-                ),
+                transforms.RandomApply([
+                    transforms.ColorJitter(
+                        brightness=DEFAULT_COLOR_JITTER_BRIGHTNESS,
+                        contrast=DEFAULT_COLOR_JITTER_CONTRAST,
+                        saturation=DEFAULT_COLOR_JITTER_SATURATION,
+                        hue=DEFAULT_COLOR_JITTER_HUE
+                    )
+                ], p=0.5),
+                
+                transforms.RandomApply([
+                    transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 0.5))
+                ], p=0.3),
             ])
         
-        # Conversión a tensor (siempre necesaria)
+        # Conversión a tensor
         transform_list.append(transforms.ToTensor())
         
         # Random erasing 
@@ -130,9 +136,9 @@ class TransformConfig:
             transform_list.append(
                 transforms.RandomErasing(
                     p=DEFAULT_RANDOM_ERASING_P,
-                    scale=(0.02, 0.08),  # Tamaño del área a borrar
-                    ratio=(0.5, 2.0),     # Aspect ratio
-                    value='random'        # Valor aleatorio para el área borrada
+                    scale=(0.02, 0.08), 
+                    ratio=(0.5, 2.0),    
+                    value='random'        
                 )
             )
         

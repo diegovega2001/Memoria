@@ -136,77 +136,50 @@ class ClusteringAnalyzer:
         logging.info(f"Inicializado clustering con {len(self.embeddings)} muestras, {self.n_true_clusters} clusters verdaderos")
     
     def _get_dbscan_params_range(self) -> Dict[str, Tuple]:
-        """
-        Define rangos de parámetros para optimización de DBSCAN.
-        
-        Utiliza análisis k-distance inteligente para determinar rangos óptimos
-        de epsilon basados en la distribución de distancias del dataset.
-        """
         n_samples = self.embeddings.shape[0]
-        reduced_dims = self.embeddings.shape[-1]
-        k = max(3, min(10, n_samples // 200))  
+        k = max(4, min(20, n_samples // 100))
         neighbors = NearestNeighbors(n_neighbors=k, n_jobs=self.n_jobs)
         neighbors.fit(self.embeddings)
-        distances, indices = neighbors.kneighbors(self.embeddings)
+        distances, _ = neighbors.kneighbors(self.embeddings)
         k_distances = np.sort(distances[:, k-1])
         
-        base_eps_min = -np.inf
-        base_eps_max = np.inf
-        if reduced_dims <= 3:  
-            base_eps_min, base_eps_max = 0.05, 2.0
-        elif reduced_dims <= 10:  
-            base_eps_min, base_eps_max = 0.1, 4.0
+        eps_min = max(0.001, np.percentile(k_distances, 5))
+        eps_max = min(20.0, np.percentile(k_distances, 98))
         
-        eps_min = max(base_eps_min, np.percentile(k_distances, 50))  
-        eps_max = min(base_eps_max, np.percentile(k_distances, 90))  
+        if eps_max - eps_min < 1.0:
+            eps_max = eps_min + 2.0
         
-        if eps_max - eps_min < 0.2:
-            eps_max = eps_min + 0.5
-    
-        min_samples_max = min(10, max(5, n_samples // 100))  
+        min_samples_max = max(15, n_samples // 30)
         return {
             'eps': (eps_min, eps_max),
-            'min_samples': (1, min_samples_max)
+            'min_samples': (2, min_samples_max)
         }
     
     def _get_hdbscan_params_range(self) -> Dict[str, Tuple]:
-        """
-        Define rangos de parámetros para optimización de HDBSCAN.
-        
-        Calcula rangos adaptativos basados en el tamaño del dataset y
-        características de los embeddings para maximizar calidad del clustering.
-        """
         n_samples = self.embeddings.shape[0]
-        max_cluster_size = min(15, n_samples // 50)
+        max_cluster_size = min(20, n_samples // 30)
         return {
-            'min_cluster_size': (1, max_cluster_size),  
-            'min_samples': (1, 8)
+            'min_cluster_size': (2, max_cluster_size),
+            'min_samples': (1, 15),
+            'cluster_selection_epsilon': (0.0, 1.0),
+            'cluster_selection_method': ['eom', 'leaf']
         }
 
     def _get_optics_params_range(self) -> Dict[str, Tuple]:
-        """
-        Define rangos de parámetros para optimización de OPTICS.
-        
-        Configura rangos adaptativos optimizados para análisis de embeddings
-        de visión computacional con enfoque en calidad de clustering.
-        """
         n_samples = self.embeddings.shape[0]
+        max_samples = max(15, n_samples // 30)
+        min_cluster_size = max(2, n_samples // 250)
+        max_cluster_size = min(100, n_samples // 15)
         return {
-            'min_samples': (1, 8),  
-            'xi': (0.005, 0.05),    
-            'min_cluster_size': (2, min(10, n_samples // 100))
+            'min_samples': (2, max_samples),
+            'xi': (0.005, 0.15),
+            'min_cluster_size': (min_cluster_size, max_cluster_size)
         }
 
     def _get_agglomerative_params_range(self) -> Dict[str, Tuple]:
-        """
-        Define rangos de parámetros para Clustering Aglomerativo.
-        
-        Utiliza análisis estadístico de distancias para calcular thresholds
-        óptimos adaptados a las características del espacio de embeddings.
-        """
         return {
-            'distance_threshold': (5.0, 30.0), 
-            'linkage': ['ward', 'complete', 'average']  
+            'distance_threshold': (1.0, 50.0),
+            'linkage': ['ward', 'complete', 'average', 'single']
         }
     
     def _create_clusterer(self, method: str, params: Dict[str, Any]):
@@ -257,7 +230,8 @@ class ClusteringAnalyzer:
                     params = {
                         'min_cluster_size': trial.suggest_int('min_cluster_size', *param_ranges['min_cluster_size']),
                         'min_samples': trial.suggest_int('min_samples', *param_ranges['min_samples']),
-                        'cluster_selection_epsilon': trial.suggest_float('cluster_selection_epsilon', *param_ranges['cluster_selection_epsilon'])
+                        'cluster_selection_epsilon': trial.suggest_float('cluster_selection_epsilon', *param_ranges['cluster_selection_epsilon']),
+                        'cluster_selection_method': trial.suggest_categorical('cluster_selection_method', param_ranges['cluster_selection_method'])
                     }
                 elif method == 'optics':
                     param_ranges = self._get_optics_params_range()
@@ -284,89 +258,96 @@ class ClusteringAnalyzer:
                 
                 # Validaciones de clustering
                 unique_labels = np.unique(cluster_labels)
-                n_clusters = len(unique_labels[unique_labels != -1])  # Excluir ruido si existe
+                n_clusters = len(unique_labels[unique_labels != -1])
                 n_samples = len(self.embeddings)
                 
-                # Filtros de validez más estrictos
-                if n_clusters < 2 or n_clusters >= n_samples * 0.8:
+                if n_clusters < 2:
                     return -1.0
                 
-                # Función objetivo multi-criterio optimizada
+                if n_clusters > n_samples * 0.6:
+                    return -1.0
+                
+                if method in ['dbscan', 'hdbscan']:
+                    n_noise = np.sum(cluster_labels == -1)
+                    if n_noise > n_samples * 0.4:
+                        return -1.0
+                
+                valid_mask = cluster_labels != -1
+                if np.sum(valid_mask) < max(10, n_samples * 0.1):
+                    return -1.0
+                
                 try:
-                    # Métricas de calidad interna
-                    silhouette = silhouette_score(self.embeddings, cluster_labels)
-                    calinski_harabasz = calinski_harabasz_score(self.embeddings, cluster_labels)
+                    valid_embeddings = self.embeddings[valid_mask]
+                    valid_cluster_labels = cluster_labels[valid_mask]
+                    valid_true_labels = self.true_labels[valid_mask]
                     
-                    # Métricas de correspondencia externa
-                    ari = adjusted_rand_score(self.true_labels, cluster_labels)
-                    nmi = normalized_mutual_info_score(self.true_labels, cluster_labels)
+                    silhouette = silhouette_score(valid_embeddings, valid_cluster_labels)
+                    calinski_harabasz = calinski_harabasz_score(valid_embeddings, valid_cluster_labels)
+                    ari = adjusted_rand_score(valid_true_labels, valid_cluster_labels)
+                    nmi = normalized_mutual_info_score(valid_true_labels, valid_cluster_labels)
                     
-                    # Normalización inteligente
-                    silhouette_norm = (silhouette + 1) / 2  # [-1,1] -> [0,1]
-                    calinski_norm = min(1.0, calinski_harabasz / 1000)  # Normalizar CH
-                    ari_norm = max(0, ari)  # ARI puede ser negativo
-                    nmi_norm = nmi  # NMI ya está en [0,1]
+                    silhouette_norm = (silhouette + 1) / 2
+                    calinski_norm = min(1.0, calinski_harabasz / 1000)
+                    ari_norm = max(0, ari)
+                    nmi_norm = nmi
                     
-                    # Función objetivo balanceada para embeddings de visión:
-                    # 35% separabilidad + 25% compacidad + 25% ARI + 15% NMI
                     combined_score = (0.35 * silhouette_norm + 
                                     0.25 * calinski_norm +
                                     0.25 * ari_norm + 
                                     0.15 * nmi_norm)
                     
+                    return combined_score
+                    
                 except Exception as metric_error:
-                    logging.warning(f"Error calculando métricas para {method}: {metric_error}")
+                    logging.debug(f"Metrics calculation failed: {metric_error}")
                     return -1.0
                 finally:
                     del clusterer
                     gc.collect()
                 
-                return combined_score
-                
             except Exception as e:
                 logging.warning(f"Trial failed for {method}: {e}")
                 return -1.0
         
-        # Configuración avanzada del optimizador
         sampler = optuna.samplers.TPESampler(
             seed=self.seed,
-            n_startup_trials=max(5, min(8, self.optimizer_trials // 3)),  # Más exploratorio
+            n_startup_trials=max(15, self.optimizer_trials // 4),
             multivariate=True,
             constant_liar=True,
-            n_ei_candidates=24  # Mejora exploración
+            n_ei_candidates=32
         )
         
-        # Estudio con pruning adaptativo
         study = optuna.create_study(
             direction='maximize',
             sampler=sampler,
-            pruner=optuna.pruners.HyperbandPruner(
-                min_resource=3,
-                max_resource=self.optimizer_trials // 2,
-                reduction_factor=3
+            pruner=optuna.pruners.MedianPruner(
+                n_startup_trials=10,
+                n_warmup_steps=15
             )
         )
         
-        # Optimización con manejo robusto de errores
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 study.optimize(
                     objective,
                     n_trials=self.optimizer_trials,
-                    show_progress_bar=False,  # Menos verboso
-                    n_jobs=1  # Evitar conflictos de paralelización
+                    show_progress_bar=False,
+                    n_jobs=1,
+                    catch=(Exception,)
                 )
         except KeyboardInterrupt:
-            logging.info(f"Optimización de {method} interrumpida por usuario")
+            logging.info(f"Optimization for {method} interrupted by user")
         except Exception as opt_error:
-            logging.error(f"Error durante optimización de {method}: {opt_error}")
+            logging.error(f"Optimization error for {method}: {opt_error}")
             return {}
-            
+        
         if study.best_value > 0:
-            logging.info(f"Optimización {method} completada. Mejor valor: {study.best_value:.4f}")
+            logging.info(f"{method.upper()} optimization: Best score {study.best_value:.4f}")
+            logging.info(f"Best parameters: {study.best_params}")
         else:
-            logging.warning(f"No se encontraron parámetros válidos para {method}")
+            logging.warning(f"No valid parameters found for {method}. Trying with increased tolerance.")
+        
         return study.best_params if study.best_value > 0 else {}
     
     def cluster(self, method: str, params: Dict[str, Any] = None) -> np.ndarray:

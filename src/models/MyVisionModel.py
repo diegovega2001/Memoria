@@ -431,7 +431,8 @@ class MultiViewVisionModel(nn.Module):
         early_stopping: Optional[Dict[str, Any]] = None,
         save_best: bool = True,
         checkpoint_dir: Optional[Union[str, Path]] = None,
-        use_amp: bool = DEFAULT_USE_AMP
+        use_amp: bool = DEFAULT_USE_AMP,
+        gradient_clip_value: Optional[float] = None
     ) -> Dict[str, List[float]]:
         """
         Realiza fine-tuning del modelo.
@@ -446,6 +447,7 @@ class MultiViewVisionModel(nn.Module):
             save_best: Si guardar el mejor modelo durante entrenamiento.
             checkpoint_dir: Directorio para guardar checkpoints.
             use_amp: Si usar Automatic Mixed Precision para acelerar entrenamiento.
+            gradient_clip_value: Valor máximo para gradient clipping. None para no aplicar.
 
         Returns:
             Diccionario con historial de entrenamiento.
@@ -489,7 +491,11 @@ class MultiViewVisionModel(nn.Module):
 
             for epoch in range(epochs):
                 # Entrenamiento
-                train_loss = self._train_epoch(criterion, optimizer, epoch, epochs, use_amp=use_amp, scaler=scaler)
+                train_loss = self._train_epoch(
+                    criterion, optimizer, epoch, epochs, 
+                    use_amp=use_amp, scaler=scaler,
+                    gradient_clip_value=gradient_clip_value
+                )
                 
                 # Warmup scheduler
                 if warmup_scheduler and epoch < warmup_epochs:
@@ -652,7 +658,8 @@ class MultiViewVisionModel(nn.Module):
         epoch: int,
         total_epochs: int,
         use_amp: bool = False,
-        scaler: Optional[torch.amp.GradScaler] = None
+        scaler: Optional[torch.amp.GradScaler] = None,
+        gradient_clip_value: Optional[float] = None
     ) -> float:
         """Ejecuta una época de entrenamiento."""
         self.model.train()
@@ -758,10 +765,17 @@ class MultiViewVisionModel(nn.Module):
 
                 if use_amp and scaler is not None:
                     scaler.scale(loss).backward()
+                    if gradient_clip_value is not None:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip_value)
+                        torch.nn.utils.clip_grad_norm_(self.head_layer.parameters(), gradient_clip_value)
                     scaler.step(optimizer)
                     scaler.update()
                 else:
                     loss.backward()
+                    if gradient_clip_value is not None:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip_value)
+                        torch.nn.utils.clip_grad_norm_(self.head_layer.parameters(), gradient_clip_value)
                     optimizer.step()
 
                 total_loss += loss.item()

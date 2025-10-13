@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional, Union
 
 import pandas as pd
 import torch
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from src.config.TransformConfig import create_standard_transform
 from src.data.MyDataset import create_car_dataset
@@ -241,16 +242,40 @@ class FineTuningPipeline:
             # Mover el criterio al dispositivo del modelo
             criterion.to(self.model.device)
             
-            # Configurar optimizador desde config
+            # Configurar optimizador con parámetros separados
             optimizer_type = self.config.get('finetune_optimizer_type', DEFAULT_FINETUNE_OPTIMIZER_TYPE)
             base_lr = self.config.get('finetune_backbone_lr', DEFAULT_BACKBONE_LR)
             head_lr = self.config.get('finetune_head_lr', DEFAULT_HEAD_LR)
             weight_decay = self.config.get('finetune_optimizer_weight_decay', DEFAULT_WEIGHT_DECAY)
             
             optimizer_cls = getattr(torch.optim, optimizer_type)
+            
+            backbone_params_with_decay = []
+            backbone_params_no_decay = []
+            head_params_with_decay = []
+            head_params_no_decay = []
+            
+            for n, p in self.model.model.named_parameters():
+                if not p.requires_grad:
+                    continue
+                if "bn" in n or "bias" in n or "norm" in n:
+                    backbone_params_no_decay.append(p)
+                else:
+                    backbone_params_with_decay.append(p)
+            
+            for n, p in self.model.head_layer.named_parameters():
+                if not p.requires_grad:
+                    continue
+                if "bn" in n or "bias" in n or "norm" in n:
+                    head_params_no_decay.append(p)
+                else:
+                    head_params_with_decay.append(p)
+            
             optimizer_params = [
-                {"params": self.model.model.parameters(), "lr": base_lr, "weight_decay": weight_decay},
-                {"params": self.model.head_layer.parameters(), "lr": head_lr, "weight_decay": weight_decay}
+                {"params": backbone_params_with_decay, "lr": base_lr, "weight_decay": weight_decay},
+                {"params": backbone_params_no_decay, "lr": base_lr, "weight_decay": 0.0},
+                {"params": head_params_with_decay, "lr": head_lr, "weight_decay": weight_decay},
+                {"params": head_params_no_decay, "lr": head_lr, "weight_decay": 0.0}
             ]
             
             optimizer = optimizer_cls(optimizer_params)
@@ -258,28 +283,87 @@ class FineTuningPipeline:
             # Configurar scheduler
             scheduler = None
             if self.config.get('use_scheduler', DEFAULT_USE_SCHEDULER):
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                    optimizer=optimizer,
-                    T_max=self.config.get('finetune_epochs', 10)
-                )
+                scheduler_type = self.config.get('scheduler_type', DEFAULT_SCHEDULER_TYPE)
+                num_epochs = self.config.get('finetune_epochs', DEFAULT_FINETUNE_EPOCHS)
+                warmup_epochs = self.config.get('warmup_epochs', DEFAULT_WARMUP_EPOCHS)
+                
+                if scheduler_type == 'cosine_warmup':                    
+                    warmup_scheduler = LinearLR(
+                        optimizer,
+                        start_factor=0.1,
+                        end_factor=1.0,
+                        total_iters=warmup_epochs
+                    )
+                    
+                    cosine_scheduler = CosineAnnealingLR(
+                        optimizer,
+                        T_max=num_epochs - warmup_epochs,
+                        eta_min=base_lr * 0.01
+                    )
+                    
+                    scheduler = SequentialLR(
+                        optimizer,
+                        schedulers=[warmup_scheduler, cosine_scheduler],
+                        milestones=[warmup_epochs]
+                    )
+                    logging.info(f"Usando scheduler cosine con warmup: {warmup_epochs} épocas warmup, {num_epochs-warmup_epochs} épocas cosine")
+                
+                elif scheduler_type == 'reduce_on_plateau':
+                    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                        optimizer,
+                        mode='min',
+                        factor=0.5,
+                        patience=3,
+                        verbose=True,
+                        min_lr=base_lr * 0.001
+                    )
+                    logging.info("Usando scheduler ReduceLROnPlateau")
+                
+                else:
+                    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                        optimizer,
+                        T_max=num_epochs,
+                        eta_min=base_lr * 0.01
+                    )
+                    logging.info("Usando scheduler CosineAnnealingLR estándar")
             
             # Configurar early stopping
             early_stopping = None
             if self.config.get('use_early_stopping', DEFAULT_USE_EARLY_STOPPING):
-                early_stopping = {'patience': self.config.get('patience', DEFAULT_PATIENCE)}
+                early_stopping = {
+                    'patience': self.config.get('patience', DEFAULT_PATIENCE),
+                    'min_delta': 0.0001,
+                    'restore_best_weights': True
+                }
+            
+            # Configurar gradient clipping
+            gradient_clip_value = self.config.get('gradient_clip_value', DEFAULT_GRADIENT_CLIP_VALUE)
             
             # Configurar AMP
             use_amp = self.config.get('use_amp', DEFAULT_USE_AMP)
+            
+            # Logging de configuración
+            logging.info(f"Configuración de entrenamiento:")
+            logging.info(f"  Backbone LR: {base_lr}")
+            logging.info(f"  Head LR: {head_lr}")
+            logging.info(f"  Weight Decay: {weight_decay}")
+            logging.info(f"  Gradient Clip: {gradient_clip_value}")
+            logging.info(f"  Scheduler: {self.config.get('scheduler_type', DEFAULT_SCHEDULER_TYPE) if self.config.get('use_scheduler') else 'None'}")
+            logging.info(f"  Early Stopping: {'Si' if early_stopping else 'No'} (patience={self.config.get('patience', DEFAULT_PATIENCE) if early_stopping else 'N/A'})")
+            logging.info(f"  AMP: {'Si' if use_amp else 'No'}")
+            logging.info(f"  Criterio: {criterion_name}")
+            logging.info(f"  P×K: {self.config.get('P', DEFAULT_P)}×{self.config.get('K', DEFAULT_K)} = {self.config.get('P', DEFAULT_P) * self.config.get('K', DEFAULT_K)} samples/batch")
             
             # Ejecutar fine-tuning
             training_history = self.model.finetune(
                 criterion=criterion,
                 optimizer=optimizer,
-                epochs=self.config.get('finetune_epochs', 10),
-                warmup_epochs=self.config.get('warmup_epochs', 1),
+                epochs=self.config.get('finetune_epochs', DEFAULT_FINETUNE_EPOCHS),
+                warmup_epochs=self.config.get('warmup_epochs', DEFAULT_WARMUP_EPOCHS),
                 scheduler=scheduler,
                 early_stopping=early_stopping,
-                use_amp=use_amp
+                use_amp=use_amp,
+                gradient_clip_value=gradient_clip_value
             )
 
             # Guardar resultados del fine-tuning
