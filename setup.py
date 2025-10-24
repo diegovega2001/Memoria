@@ -41,13 +41,12 @@ setup(
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.10",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
-    python_requires=">=3.12",
+    python_requires=">=3.10",
     install_requires=read_requirements(),
     extras_require={
         "dev": ["pytest>=7.4.0", "pytest-cov>=4.1.0", "black>=23.0.0"],

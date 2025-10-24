@@ -116,27 +116,42 @@ class FineTuningPipeline:
             augment=False
         )
 
-        # Determinar si usar IdentitySampler según el objetivo
+        # Determinar estrategia de sampling según el objetivo
         objective = self.config.get('objective', DEFAULT_OBJECTIVE)
-        use_identity_sampler = (objective in ['metric_learning', 'ArcFace'])
+        sampling_strategy = self.config.get('sampling_strategy', 'standard')
+        
+        # Auto-configurar sampling si no se especificó
+        if sampling_strategy == 'standard':
+            if objective in ['metric_learning', 'ArcFace']:
+                sampling_strategy = 'pk'
+                logging.info(f"Auto-configurando sampling_strategy='pk' para objective='{objective}'")
+            elif objective == 'classification':
+                sampling_strategy = 'class_balanced'
+                logging.info(f"Auto-configurando sampling_strategy='class_balanced' para objective='{objective}'")
         
         self.dataset_dict = create_car_dataset(
             df=self.df,
             views=self.config.get('views', DEFAULT_VIEWS),
-            min_images_for_abundant_class=self.config.get('min_images_for_abundant_class', DEFAULT_MIN_IMAGES_FOR_ABUNDANT_CLASS),
-            seed=self.config.get('seed', DEFAULT_SEED),
-            P=self.config.get('P', DEFAULT_P),
-            K=self.config.get('K', DEFAULT_K),
+            min_train_images=self.config.get('min_train_images', 5),
+            min_val_images=self.config.get('min_val_images', 3),
+            min_test_images=self.config.get('min_test_images', 3),
             train_transform=train_transform,
             val_transform=val_transform,
             batch_size=self.config.get('batch_size', DEFAULT_BATCH_SIZE),
             num_workers=self.config.get('num_workers', DEFAULT_NUM_WORKERS),
-            use_identity_sampler=use_identity_sampler,
+            seed=self.config.get('seed', DEFAULT_SEED),
+            sampling_strategy=sampling_strategy,
+            P=self.config.get('P', DEFAULT_P),
+            K=self.config.get('K', DEFAULT_K),
+            # Parámetros adicionales del dataset (pasados como kwargs)
+            class_granularity=self.config.get('class_granularity', DEFAULT_CLASS_GRANULARITY),
             model_type=self.config.get('model_type', DEFAULT_MODEL_TYPE),
-            description_include=self.config.get('description_include', DEFAULT_DESCRIPTION_INCLUDE)
+            description_include=self.config.get('description_include', DEFAULT_DESCRIPTION_INCLUDE),
+            enable_zero_shot=self.config.get('enable_zero_shot', DEFAULT_TEST_UNSEEN_ENABLED),
+            num_zero_shot_classes=self.config.get('num_zero_shot_classes', None)
         )
         
-        logging.info(f"Dataset creado con objective='{objective}', use_identity_sampler={use_identity_sampler}")
+        logging.info(f"Dataset creado con objective='{objective}', sampling_strategy='{sampling_strategy}'")
         
         # Guardar estadísticas del dataset
         dataset_stats = self.dataset_dict['dataset'].get_dataset_statistics()
@@ -224,7 +239,7 @@ class FineTuningPipeline:
                 criterion = create_metric_learning_criterion(
                     loss_type=criterion_name, 
                     embedding_dim=self.model.embedding_dim, 
-                    num_classes=self.dataset_dict['dataset'].num_models
+                    num_classes=self.dataset_dict['dataset'].num_classes
                 )
             else:
                 # Validar que el objetivo sea classification para criterios estándar
@@ -455,7 +470,7 @@ class FineTuningPipeline:
         
         logging.info(f"Guardando resultados en: {experiment_dir}")
         
-        # Guardar configuración y resultados (sin embeddings que son muy grandes para JSON)
+        # Guardar configuración y resultados como JSON
         safe_json_dump(self.config, experiment_dir / "config.json")
         
         # Finalizar resultados con tiempo de finalización

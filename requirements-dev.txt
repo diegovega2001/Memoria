@@ -1,6 +1,6 @@
 # ==============================================================================
 # REQUIREMENTS-DEV.TXT - Dependencias Esenciales para Desarrollo
-# Proyecto CompCars - Python 3.12.6
+# Proyecto CompCars - Python 3.10
 # ==============================================================================
 
 # ---------------------- DEEP LEARNING CORE ----------------------

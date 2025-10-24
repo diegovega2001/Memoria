@@ -166,7 +166,7 @@ class MultiViewVisionModel(nn.Module):
 
         logging.info(f"Inicializado {self.__class__.__name__}: {self.name}")
         logging.info(f"Modelo base: {self.model_name} con pesos {self.weights}")
-        logging.info(f"Objetivo: {self.objective}, Embedding dim: {self.embedding_dim}, Clases: {self.dataset.num_models}")
+        logging.info(f"Objetivo: {self.objective}, Embedding dim: {self.embedding_dim}, Clases: {self.dataset.num_classes}")
 
     def _validate_parameters(
         self,
@@ -279,7 +279,7 @@ class MultiViewVisionModel(nn.Module):
         """
         # Dimensión de entrada: embedding_dim * número de vistas
         input_dim = self.embedding_dim * self.dataset.num_views
-        output_dim = self.dataset.num_models
+        output_dim = self.dataset.num_classes
         
         # Creación de la capa de clasificación
         classification_layer = nn.Linear(input_dim, output_dim)
@@ -336,9 +336,9 @@ class MultiViewVisionModel(nn.Module):
         # Creación de la capa ArcFace
         arcface_layer = ArcFaceLayer(
             embedding_dim=DEFAULT_OUTPUT_EMBEDDING_DIM,
-            num_classes=self.dataset.num_models,
+            num_classes=self.dataset.num_classes,
         )
-        logging.debug(f"Capa ArcFace creada: dim={DEFAULT_OUTPUT_EMBEDDING_DIM}, clases={self.dataset.num_models}")
+        logging.debug(f"Capa ArcFace creada: dim={DEFAULT_OUTPUT_EMBEDDING_DIM}, clases={self.dataset.num_classes}")
         return arcface_layer
 
     def extract_embeddings(
@@ -1046,7 +1046,7 @@ class MultiViewVisionModel(nn.Module):
                 'model_name': self.model_name,
                 'weights': self.weights,
                 'embedding_dim': self.embedding_dim,
-                'num_classes': self.dataset.num_models,
+                'num_classes': self.dataset.num_classes,
                 'num_views': self.dataset.num_views
             },
             'metadata': kwargs
@@ -1083,9 +1083,9 @@ class MultiViewVisionModel(nn.Module):
 
             # Verificar compatibilidad
             config = checkpoint.get('model_config', {})
-            if config.get('num_classes') != self.dataset.num_models:
+            if config.get('num_classes') != self.dataset.num_classes:
                 logging.warning(
-                    f"Número de clases no coincide: {config.get('num_classes')} vs {self.dataset.num_models}"
+                    f"Número de clases no coincide: {config.get('num_classes')} vs {self.dataset.num_classes}"
                 )
 
             logging.info(f"Modelo cargado desde: {model_path}")
@@ -1171,7 +1171,7 @@ class MultiViewVisionModel(nn.Module):
             'device': str(self.device),
             'batch_size': self.batch_size,
             'embedding_dim': self.embedding_dim,
-            'num_classes': self.dataset.num_models,
+            'num_classes': self.dataset.num_classes,
             'num_views': self.dataset.num_views,
             'total_parameters': sum(p.numel() for p in self.parameters()),
             'trainable_parameters': sum(p.numel() for p in self.parameters() if p.requires_grad),

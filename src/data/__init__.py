@@ -25,7 +25,7 @@ from __future__ import annotations
 from .DataFrameMaker import DataFrameMaker, CompCarsDatasetError, create_compcars_dataset
 from .MyDataset import (
     CarDataset,
-    IdentitySampler,
+    PKBatchSampler,
     CarDatasetError,
     create_car_dataset,
     validate_dataset_structure,
@@ -35,7 +35,7 @@ __all__ = [
     # Classes
     'DataFrameMaker',
     'CarDataset', 
-    'IdentitySampler',
+    'PKBatchSampler',
     # Exceptions
     'CompCarsDatasetError',
     'CarDatasetError',
