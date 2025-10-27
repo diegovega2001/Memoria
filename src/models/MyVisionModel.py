@@ -466,7 +466,12 @@ class MultiViewVisionModel(nn.Module):
             }
             
             best_val_loss = float('inf')
+            best_epoch = 0
             patience_counter = 0
+            
+            # Para guardar el mejor estado del modelo
+            best_model_sate = None
+            best_head_state = None
 
             # Scheduler de warmup si se especifica
             warmup_scheduler = None
@@ -475,7 +480,7 @@ class MultiViewVisionModel(nn.Module):
 
             # Configuración de early stopping
             early_stop_patience = early_stopping.get('patience', 10) if early_stopping else None
-            early_stop_min_delta = early_stopping.get('min_delta', 0.001) if early_stopping else None
+            restore_best_weights = early_stopping.get('restore_best_weights', True) if early_stopping else save_best
 
             # Configurar GradScaler para AMP si está habilitado y hay GPU disponible
             scaler = None
@@ -529,25 +534,52 @@ class MultiViewVisionModel(nn.Module):
                     log_msg += f" | Recall@1: {val_recalls[1]:.2f}% | Recall@5: {val_recalls[5]:.2f}%"
                 
                 logging.info(log_msg)
+            
+                # Verificar si hay mejora en validation loss
+                if val_loss < best_val_loss:
+                    # Hay mejora - actualizar best y resetear patience
+                    best_val_loss = val_loss
+                    best_epoch = epoch
+                    patience_counter = 0
 
-                # Guardar mejor modelo
-                if save_best and val_loss < best_val_loss:
-                    if checkpoint_dir:
+                    # Guardar estado en memoria para restaurar al final
+                    if restore_best_weights:
+                        best_model_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
+                        best_head_state = {k: v.cpu().clone() for k, v in self.head_layer.state_dict().items()}
+                        logging.info(f"Mejor modelo guardado en memoria (epoch {epoch+1}, val_loss: {val_loss:.4f})")
+
+                    # Guardar checkpoint en disco
+                    if save_best and checkpoint_dir:
                         self._save_checkpoint(checkpoint_dir, epoch, val_loss, 'best')
+                        logging.info(f"Checkpoint guardado en disco: {checkpoint_dir}/checkpoint_epoch_{epoch}_best.pth")
 
-                # Early stopping
-                if early_stopping:
-                    if val_loss < best_val_loss - early_stop_min_delta:
-                        patience_counter = 0
-                        best_val_loss = val_loss
-                    else:
+                else:
+                    # No hay mejora - incrementar patience si early stopping está activo
+                    if early_stopping:
                         patience_counter += 1
+                        logging.debug(f"Sin mejora (patience: {patience_counter}/{early_stop_patience})")
 
-                    if patience_counter >= early_stop_patience:
-                        logging.info(f"Early stopping triggered at epoch {epoch+1} based on validaton loss")
-                        break
+                # Early stopping check
+                if early_stopping and patience_counter >= early_stop_patience:
+                    logging.info(f"⚠️  Early stopping triggered at epoch {epoch+1}")
+                    logging.info(f"   Mejor val_loss: {best_val_loss:.4f} en epoch {best_epoch+1}")
+                    logging.info(f"   Épocas sin mejora: {patience_counter}")
+                    break
 
-            logging.info(f"Fine-tuning completado.")
+            # Restaurar mejor modelo al finalizar
+            if restore_best_weights and best_model_state is not None:
+                logging.info(f"\n{'='*60}")
+                logging.info(f"Restaurando mejor modelo (epoch {best_epoch+1}, val_loss: {best_val_loss:.4f})")
+                logging.info(f"{'='*60}")
+                self.model.load_state_dict(best_model_state)
+                self.head_layer.load_state_dict(best_head_state)
+                # Mover de vuelta al dispositivo
+                self.model.to(self.device)
+                self.head_layer.to(self.device)
+            else:
+                logging.info(f"Modelo final: pesos de la última época (epoch {epoch+1})")
+
+            logging.info("Fine-tuning completado.")
             return history
 
         except Exception as e:
@@ -759,7 +791,7 @@ class MultiViewVisionModel(nn.Module):
                                 loss = torch.tensor(0.0, device=self.device, requires_grad=True)
                         
                         else:
-                            raise VisionModelError(f"Función de pérdida no soportada para metric_learning.")
+                            raise VisionModelError("Función de pérdida no soportada para metric_learning.")
                     else:
                         raise VisionModelError(f"Objetivo '{self.objective}' no reconocido.")
 
@@ -895,7 +927,7 @@ class MultiViewVisionModel(nn.Module):
                             predicted = torch.zeros_like(labels)
                             
                         else:
-                            raise VisionModelError(f"Función de pérdida no soportada para metric_learning.")
+                            raise VisionModelError("Función de pérdida no soportada para metric_learning.")
                         
                         # Guardar embeddings proyectados para recalls
                         all_embeddings.append(projected_embeddings.cpu())

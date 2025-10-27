@@ -593,7 +593,7 @@ class FineTuningPipeline:
                 self.results['summary']['finetuned_recall@5'] = finetuned_eval['recall@5']
                 self.results['summary']['recall@5_improvement'] = finetuned_eval['recall@5'] - baseline_eval['recall@5']
             
-            logging.info(f"=== PIPELINE COMPLETADO ===")
+            logging.info("=== PIPELINE COMPLETADO ===")
             logging.info(f"Mejora de {metric_name}: {improvement:.4f} ({improvement_percentage:.2f}%)")
             
             # 7. Guardar resultados automáticamente

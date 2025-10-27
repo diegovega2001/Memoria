@@ -26,8 +26,7 @@ from torch.utils.data import Dataset, Sampler, DataLoader, default_collate
 from src.defaults import (
     DEFAULT_VIEWS, DEFAULT_SEED, DEFAULT_P, DEFAULT_K, DEFAULT_MODEL_TYPE,
     DEFAULT_DESCRIPTION_INCLUDE, DEFAULT_BATCH_SIZE, DEFAULT_NUM_WORKERS, 
-    MODEL_TYPES, DESCRIPTION_OPTIONS, UNKNOWN_VALUES,
-    ERROR_INVALID_DESCRIPTION, ERROR_INVALID_MODEL_TYPE,
+    MODEL_TYPES, DESCRIPTION_OPTIONS, ERROR_INVALID_DESCRIPTION, ERROR_INVALID_MODEL_TYPE,
     CLASS_GRANULARITY_OPTIONS, DEFAULT_CLASS_GRANULARITY
 )
 
@@ -606,10 +605,6 @@ class CarDataset(Dataset):
         # Calcular mínimo de imágenes entre vistas
         min_images = min(len(view_images[view]) for view in self.views)
         
-        if min_images < self.min_total_images:
-            logging.warning(f"Clase {class_key} tiene {min_images} imágenes (<{self.min_total_images}), saltando...")
-            return [], [], []
-        
         # Asignar según mínimos fijos
         n_train = self.min_train_images
         n_val = self.min_val_images
@@ -910,7 +905,7 @@ class CarDataset(Dataset):
 
             return output
 
-        except Exception as e:
+        except Exception:
             raise
 
     def get_dataset_statistics(self) -> Dict[str, Any]:
@@ -1465,9 +1460,9 @@ def create_car_dataset(
         logging.info(f"Zero-shot loader: {len(zero_shot_dataset)} samples")
     
     # Log sobre augmentación
-    logging.info(f"Transforms configurados:")
-    logging.info(f"  - Train: CON augmentación (crítico para clases con mínimos)")
-    logging.info(f"  - Val/Test: SIN augmentación")
+    logging.info("Transforms configurados:")
+    logging.info("  - Train: CON augmentación (crítico para clases con mínimos)")
+    logging.info("  - Val/Test: SIN augmentación")
     
     result = {
         "dataset": base_dataset,

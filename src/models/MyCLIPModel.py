@@ -452,7 +452,7 @@ class MultiViewCLIPModel(nn.Module):
                         logging.info(f'Early stopping triggered at epoch {epoch+1} based on Recall@1')
                         break
 
-            logging.info(f'Fine-Tuning completado.')
+            logging.info('Fine-Tuning completado.')
             return history
     
         except Exception as e:

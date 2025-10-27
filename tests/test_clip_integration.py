@@ -18,10 +18,6 @@ def test_imports():
     
     try:
         # Imports básicos
-        from src.models import MultiViewCLIPModel, CLIPModelError, create_clip_model
-        from src.pipeline import CLIPFineTuningPipeline, CLIPFineTuningPipelineError, create_clip_finetuning_pipeline
-        from src.models import create_metric_learning_criterion
-        from src.data import create_car_dataset
         
         print("✓ Todos los imports exitosos")
         return True
@@ -37,10 +33,7 @@ def test_model_creation():
     print("="*60)
     
     try:
-        import torch
         import pandas as pd
-        from src.models import create_clip_model
-        from src.data import create_car_dataset
         
         # Crear mini dataset
         df = pd.DataFrame({

@@ -1,7 +1,7 @@
 """
-Script de Fine-Tuning para ResNet50.
+Script de Fine-Tuning para modelos de visión.
 
-Este script ejecuta el proceso completo de fine-tuning para el modelo ResNet50
+Este script ejecuta el proceso completo de fine-tuning para los modelos ResNet50, ResNet101, ViTBase32 y ViTBase16
 usando configuración desde archivo YAML con logging detallado.
 """
 
@@ -20,13 +20,13 @@ if __name__ == "__main__":
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     logging.info("="*80)
-    logging.info("INICIANDO SCRIPT DE FINE-TUNING RESNET50")
+    logging.info("INICIANDO SCRIPT DE FINE-TUNING Modelos de Visión")
     logging.info("="*80)
 
     try:
         # Rutas de archivos
         dataset_csv_path = "dataset.csv" 
-        config_yaml_path = "configs/resnet50_classification.yaml"
+        config_yaml_path = "configs/resnet50_arcface.yaml"
         
         # Cargar dataset
         logging.info(f"\n{'='*80}")
@@ -35,14 +35,14 @@ if __name__ == "__main__":
         logging.info(f"Ruta: {dataset_csv_path}")
         
         dataset_df = pd.read_csv(dataset_csv_path)
-        logging.info(f"Dataset cargado")
+        logging.info("Dataset cargado")
         
         # Cargar configuración
         logging.info(f"\n{'='*80}")
         logging.info("CARGANDO CONFIGURACIÓN")
         logging.info(f"{'='*80}")
         
-        logging.info(f"Cargando configuración")
+        logging.info("Cargando configuración")
         with open(config_yaml_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
         logging.info("Configuración cargada exitosamente")
@@ -55,7 +55,6 @@ if __name__ == "__main__":
         pipeline = create_finetuning_pipeline(
             config=config,
             df=dataset_df,
-            experiment_name="resnet50_classification",
             model_type='vision'
         )
         

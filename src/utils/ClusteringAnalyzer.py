@@ -11,7 +11,7 @@ import gc
 import logging
 import multiprocessing as mp
 import warnings
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple
 
 import hdbscan
 import numpy as np
@@ -26,7 +26,6 @@ from sklearn.metrics import (
     normalized_mutual_info_score,
     silhouette_score,
 )
-from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.neighbors import NearestNeighbors
 
 

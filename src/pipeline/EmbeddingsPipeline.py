@@ -21,7 +21,6 @@ import numpy as np
 import pandas as pd
 import torch
 
-from src.config.TransformConfig import create_standard_transform
 from src.data.MyDataset import create_car_dataset
 from src.utils.ClusteringAnalyzer import ClusteringAnalyzer
 from src.utils.ClusterVisualizer import ClusterVisualizer
@@ -474,7 +473,7 @@ class EmbeddingsPipeline:
             zip_result_path = self.save_results()
             self.results['saved_to'] = str(zip_result_path)
             
-            logging.info(f"=== ANÁLISIS BASELINE COMPLETADO ===")
+            logging.info("=== ANÁLISIS BASELINE COMPLETADO ===")
             logging.info(f"Resultados guardados en: {zip_result_path}")
             return self.results
             
@@ -500,7 +499,7 @@ class EmbeddingsPipeline:
             zip_result_path = self.save_results()
             self.results['saved_to'] = str(zip_result_path)
             
-            logging.info(f"=== ANÁLISIS FINETUNED COMPLETADO ===")
+            logging.info("=== ANÁLISIS FINETUNED COMPLETADO ===")
             logging.info(f"Resultados guardados en: {zip_result_path}")
             return self.results
             
@@ -526,7 +525,7 @@ class EmbeddingsPipeline:
             zip_result_path = self.save_results()
             self.results['saved_to'] = str(zip_result_path)
             
-            logging.info(f"=== ANÁLISIS COMPARATIVO COMPLETADO ===")
+            logging.info("=== ANÁLISIS COMPARATIVO COMPLETADO ===")
             logging.info(f"Resultados guardados en: {zip_result_path}")
             return self.results
             
@@ -549,7 +548,7 @@ class EmbeddingsPipeline:
             zip_result_path = self.save_results()
             self.results['saved_to'] = str(zip_result_path)
             
-            logging.info(f"=== ANÁLISIS BASELINE COMPLETADO ===")
+            logging.info("=== ANÁLISIS BASELINE COMPLETADO ===")
             logging.info(f"Resultados guardados en: {zip_result_path}")
             return self.results
             
@@ -575,7 +574,7 @@ class EmbeddingsPipeline:
             zip_result_path = self.save_results()
             self.results['saved_to'] = str(zip_result_path)
             
-            logging.info(f"=== ANÁLISIS FINETUNED COMPLETADO ===")
+            logging.info("=== ANÁLISIS FINETUNED COMPLETADO ===")
             logging.info(f"Resultados guardados en: {zip_result_path}")
             return self.results
             
@@ -601,7 +600,7 @@ class EmbeddingsPipeline:
             zip_result_path = self.save_results()
             self.results['saved_to'] = str(zip_result_path)
             
-            logging.info(f"=== ANÁLISIS COMPARATIVO COMPLETADO ===")
+            logging.info("=== ANÁLISIS COMPARATIVO COMPLETADO ===")
             logging.info(f"Resultados guardados en: {zip_result_path}")
             return self.results
             
@@ -650,7 +649,7 @@ class EmbeddingsPipeline:
         finetuned_zip_path: Union[str, Path],
         save_comparison: bool = True
     ) -> Dict[str, Any]:
-        logging.info(f"=== COMPARACIÓN DE RESULTADOS GUARDADOS ===")
+        logging.info("=== COMPARACIÓN DE RESULTADOS GUARDADOS ===")
         logging.info(f"Baseline: {baseline_zip_path}")
         logging.info(f"Finetuned: {finetuned_zip_path}")
         
@@ -712,7 +711,7 @@ class EmbeddingsPipeline:
             
             if 'performance_improvement' in comparison:
                 perf = comparison['performance_improvement']
-                logging.info(f"\nMEJORAS EN RENDIMIENTO:")
+                logging.info("\nMEJORAS EN RENDIMIENTO:")
                 logging.info(f"  ARI: {perf['baseline_ari']:.4f} → {perf['finetuned_ari']:.4f} (Δ {perf['ari_improvement']:+.4f})")
                 logging.info(f"  Silhouette: {perf['baseline_silhouette']:.4f} → {perf['finetuned_silhouette']:.4f} (Δ {perf['silhouette_improvement']:+.4f})")
                 logging.info(f"  NMI: {perf['baseline_nmi']:.4f} → {perf['finetuned_nmi']:.4f} (Δ {perf['nmi_improvement']:+.4f})")
