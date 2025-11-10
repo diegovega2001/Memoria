@@ -208,7 +208,7 @@ from src.pipeline import create_clip_finetuning_pipeline
 # 1. Configurar pipeline CLIP
 config = {
     'model_name': 'clip-vit-base-patch32',
-    'model_type': 'both',  # Imágenes + texto
+    'model_type': 'multimodal',  # Imágenes + texto
     'description_include': 'all',  # Usar toda la info textual
     'objective': 'metric_learning',
     # ... más config

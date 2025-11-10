@@ -3,7 +3,8 @@ Módulo de configuración de transformaciones para imágenes.
 
 Este módulo proporciona una clase para configurar y aplicar transformaciones
 de imágenes usando torchvision.
-Incluye augmentación agresiva para mejorar la generalización.
+Incluye augmentación para que las imágenes del dataset sean más diversas y cercanas a la realidad,
+con el objetivo de mejorar la generalización.
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from typing import Any, Optional, Tuple, Union
 
 from torchvision import transforms
 
-from src.defaults import (DEFAULT_COLOR_JITTER_BRIGHTNESS, DEFAULT_COLOR_JITTER_CONTRAST, DEFAULT_COLOR_JITTER_SATURATION, DEFAULT_COLOR_JITTER_HUE, DEFAULT_ROTATION_DEGREES, 
-                          DEFAULT_RANDOM_ERASING_P, DEFAULT_GRAYSCALE, DEFAULT_RESIZE, DEFAULT_NORMALIZE, DEFAULT_USE_BBOX, DEFAULT_AUGMENT, IMAGENET_MEAN, IMAGENET_STD, 
-                          GRAYSCALE_MEAN, GRAYSCALE_STD)
+from src.defaults import (DEFAULT_COLOR_JITTER_BRIGHTNESS, DEFAULT_COLOR_JITTER_CONTRAST, DEFAULT_COLOR_JITTER_SATURATION, 
+                        DEFAULT_COLOR_JITTER_HUE, DEFAULT_ROTATION_DEGREES, DEFAULT_RANDOM_ERASING_P, DEFAULT_GRAYSCALE, 
+                        DEFAULT_RESIZE, DEFAULT_NORMALIZE, DEFAULT_USE_BBOX, DEFAULT_AUGMENT, IMAGENET_MEAN, IMAGENET_STD, 
+                        GRAYSCALE_MEAN, GRAYSCALE_STD)
 
 
 # Configuración de warnings y logging
@@ -41,7 +43,7 @@ class TransformConfig:
     
     Attributes:
         grayscale: Si True, convierte la imagen a escala de grises manteniendo
-            3 canales para compatibilidad con modelos preentrenados.
+            3 canales para compatibilidad con modelos preentrenados de pytorch.
         resize: Tupla (height, width) para redimensionar la imagen. 
             Si es None, no se aplica redimensionado.
         normalize: Si True, aplica normalización usando estadísticas de ImageNet
@@ -61,14 +63,14 @@ class TransformConfig:
     use_bbox: bool = DEFAULT_USE_BBOX
     augment: bool = DEFAULT_AUGMENT
     
-    def __post_init__(self) -> None:
+    def _validate_parameters(self) -> None:
         """Valida los parámetros después de la inicialización."""
         if self.resize is not None:
             if (not isinstance(self.resize, (tuple, list)) or 
                 len(self.resize) != 2 or 
                 not all(isinstance(x, int) and x > 0 for x in self.resize)):
                 raise ValueError(
-                    "resize debe ser una tupla de dos enteros positivos (height, width)"
+                    "El parámetro resize debe ser una tupla de dos enteros positivos (height, width)"
                 )
     
     def _get_transforms(self) -> transforms.Compose:
@@ -85,7 +87,7 @@ class TransformConfig:
         
         # Conversión a escala de grises
         if self.grayscale:
-            # Mantener 3 canales para compatibilidad con modelos preentrenados
+            # Mantener 3 canales para compatibilidad con modelos preentrenados de pytorch
             transform_list.append(transforms.Grayscale(num_output_channels=3))
         
         # Redimensionado
@@ -95,8 +97,10 @@ class TransformConfig:
         # Augmentación 
         if self.augment:
             transform_list.extend([
+                # Flip horinzontal
                 transforms.RandomHorizontalFlip(p=0.3),
                 
+                # Rotación aplicada aleatoriamente
                 transforms.RandomApply([
                     transforms.RandomRotation(
                         degrees=DEFAULT_ROTATION_DEGREES,
@@ -104,6 +108,7 @@ class TransformConfig:
                     )
                 ], p=0.3),
                 
+                # Traslación aplicada aleatoriamente
                 transforms.RandomApply([
                     transforms.RandomAffine(
                         degrees=0,
@@ -114,6 +119,7 @@ class TransformConfig:
                     )
                 ], p=0.3),
                 
+                # Color jitter aplicado aleatoriamente
                 transforms.RandomApply([
                     transforms.ColorJitter(
                         brightness=DEFAULT_COLOR_JITTER_BRIGHTNESS,
@@ -123,6 +129,7 @@ class TransformConfig:
                     )
                 ], p=0.5),
                 
+                # Gaussian blur aplicado aleatoriamente
                 transforms.RandomApply([
                     transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 0.5))
                 ], p=0.3),

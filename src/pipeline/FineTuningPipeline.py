@@ -22,7 +22,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from src.config.TransformConfig import create_standard_transform
 from src.data.MyDataset import create_car_dataset
-from src.models.Criterions import create_metric_learning_criterion
+from src.models.MetricLearningLosses import create_metric_learning_loss, create_miner
 from src.models.MyVisionModel import create_vision_model
 from src.models.MyCLIPModel import create_clip_model
 from src.utils.JsonUtils import safe_json_dump
@@ -50,6 +50,12 @@ class FineTuningPipeline:
     Esta clase maneja todo el proceso de fine-tuning: creación del dataset,
     inicialización del modelo, entrenamiento, evaluación y guardado de resultados.
     
+    Cambios principales:
+    - Dataset con splits porcentuales (train_ratio, val_ratio, test_ratio)
+    - Integración con pytorch-metric-learning para losses
+    - Soporte para múltiples losses: triplet, contrastive, arcface, ntxent, multi_similarity
+    - Auto-configuración de sampling strategy según objective
+    
     Attributes:
         config: Configuración del pipeline.
         df: DataFrame con datos del dataset.
@@ -58,7 +64,15 @@ class FineTuningPipeline:
         results: Diccionario con resultados del entrenamiento.
         
     Example:
-        >>> pipeline = FineTuningPipeline(config_dict, dataframe)
+        >>> config = {
+        ...     'min_images': 5,
+        ...     'train_ratio': 0.7,
+        ...     'val_ratio': 0.2,
+        ...     'test_ratio': 0.1,
+        ...     'objective': 'metric_learning',
+        ...     'finetune_criterion': {'type': 'triplet', 'margin': 0.2}
+        ... }
+        >>> pipeline = FineTuningPipeline(config, dataframe)
         >>> results = pipeline.run_full_pipeline()
         >>> pipeline.save_results("experiment_name")
     """
@@ -95,7 +109,19 @@ class FineTuningPipeline:
         logging.info(f"Inicializado FineTuningPipeline: {self.experiment_name}")
     
     def create_dataset(self) -> None:
-        """Crea el dataset para entrenamiento."""        
+        """
+        Crea el dataset para entrenamiento con división porcentual.
+        
+        Utiliza los nuevos parámetros de MyDataset:
+        - min_images: Número mínimo de imágenes por clase
+        - train_ratio: Porcentaje para entrenamiento (default: 0.7)
+        - val_ratio: Porcentaje para validación (default: 0.2)
+        - test_ratio: Porcentaje para test (default: 0.1)
+        
+        Auto-configura la estrategia de sampling según el objective:
+        - 'metric_learning' o 'ArcFace' -> 'pk' sampling
+        - 'classification' -> 'standard' sampling
+        """        
         # Crear transformaciones separadas para train y val/test
         augment = self.config.get('augment', DEFAULT_USE_AUGMENT)
         if augment:
@@ -122,19 +148,17 @@ class FineTuningPipeline:
         
         # Auto-configurar sampling si no se especificó
         if sampling_strategy == 'standard':
-            if objective in ['metric_learning', 'ArcFace']:
+            if objective == 'metric_learning':
                 sampling_strategy = 'pk'
                 logging.info(f"Auto-configurando sampling_strategy='pk' para objective='{objective}'")
-            elif objective == 'classification':
-                sampling_strategy = 'class_balanced'
-                logging.info(f"Auto-configurando sampling_strategy='class_balanced' para objective='{objective}'")
         
         self.dataset_dict = create_car_dataset(
             df=self.df,
             views=self.config.get('views', DEFAULT_VIEWS),
-            min_train_images=self.config.get('min_train_images', 5),
-            min_val_images=self.config.get('min_val_images', 3),
-            min_test_images=self.config.get('min_test_images', 3),
+            min_images=self.config.get('min_images', 5),
+            train_ratio=self.config.get('train_ratio', 0.7),
+            val_ratio=self.config.get('val_ratio', 0.2),
+            test_ratio=self.config.get('test_ratio', 0.1),
             train_transform=train_transform,
             val_transform=val_transform,
             batch_size=self.config.get('batch_size', DEFAULT_BATCH_SIZE),
@@ -143,12 +167,11 @@ class FineTuningPipeline:
             sampling_strategy=sampling_strategy,
             P=self.config.get('P', DEFAULT_P),
             K=self.config.get('K', DEFAULT_K),
-            # Parámetros adicionales del dataset (pasados como kwargs)
             class_granularity=self.config.get('class_granularity', DEFAULT_CLASS_GRANULARITY),
             model_type=self.config.get('model_type', DEFAULT_MODEL_TYPE),
             description_include=self.config.get('description_include', DEFAULT_DESCRIPTION_INCLUDE),
-            enable_zero_shot=self.config.get('enable_zero_shot', DEFAULT_TEST_UNSEEN_ENABLED),
-            num_zero_shot_classes=self.config.get('num_zero_shot_classes', None)
+            include_oneshot_in_test=self.config.get('include_oneshot_in_test', False),
+            oneshot_ratio=self.config.get('oneshot_ratio', 0.1)
         )
         
         logging.info(f"Dataset creado con objective='{objective}', sampling_strategy='{sampling_strategy}'")
@@ -222,43 +245,76 @@ class FineTuningPipeline:
         return baseline_embeddings
     
     def run_finetuning(self) -> Dict[str, Any]:
-        """Ejecuta el fine-tuning del modelo."""
+        """
+        Ejecuta el fine-tuning del modelo.
+        
+        Ahora utiliza pytorch-metric-learning para crear losses:
+        - 'triplet': TripletLossWrapper
+        - 'contrastive': ContrastiveLossWrapper
+        - 'arcface': ArcFaceLossWrapper
+        - 'ntxent': NTXentLossWrapper (InfoNCE)
+        - 'multi_similarity': MultiSimilarityLossWrapper
+        
+        La configuración puede ser un string o dict con parámetros adicionales.
+        Ejemplo: {'type': 'triplet', 'margin': 0.2, 'distance': 'euclidean'}
+        """
         if self.model is None:
             raise FineTuningPipelineError("Modelo no creado. Ejecutar create_model() primero.")
 
         if self.model_type == 'vision':
-            # Configurar criterio de pérdida desde config
-            criterion_name = self.config.get('finetune_criterion', DEFAULT_FINETUNE_CRITERION)
-            if criterion_name in ['TripletLoss', 'ContrastiveLoss']:
+            # Configurar criterio de pérdida usando MetricLearningLosses
+            criterion_config = self.config.get('finetune_criterion', {})
+            
+            # Si es string, convertir a dict con tipo
+            if isinstance(criterion_config, str):
+                criterion_config = {'type': criterion_config}
+            
+            loss_type = criterion_config.get('type', DEFAULT_FINETUNE_CRITERION)
+            
+            # Validar que el loss sea apropiado para el objective
+            if loss_type in ['triplet', 'contrastive', 'ntxent', 'multi_similarity', 'arcface']:
                 # Validar que el objetivo sea metric_learning
                 if self.model.objective != 'metric_learning':
                     raise FineTuningPipelineError(
-                        f"Criterio '{criterion_name}' requiere objective='metric_learning', "
+                        f"Loss '{loss_type}' requiere objective='metric_learning', "
                         f"pero el modelo tiene objective='{self.model.objective}'"
                     )
-                criterion = create_metric_learning_criterion(
-                    loss_type=criterion_name, 
-                    embedding_dim=self.model.embedding_dim, 
-                    num_classes=self.dataset_dict['dataset'].num_classes
+            
+            # Crear loss usando factory de MetricLearningLosses
+            if loss_type in ['triplet', 'contrastive', 'arcface', 'ntxent', 'multisimilarity', 'multi_similarity', 'CLIPLoss']:
+                # Calcular embedding_dim real considerando número de vistas
+                num_views = len(self.config.get('views', ['front']))
+                actual_embedding_dim = self.model.embedding_dim * num_views
+                
+                # num_classes: Solo clases regulares para entrenamiento
+                num_training_classes = self.dataset_dict['dataset'].get_num_classes_for_training()
+                
+                criterion = create_metric_learning_loss(
+                    loss_type=loss_type,
+                    num_classes=num_training_classes,
+                    embedding_dim=actual_embedding_dim,
+                    **criterion_config  # Pasar todos los parámetros adicionales
                 )
+                logging.info(f"Criterio '{loss_type}' creado usando pytorch-metric-learning (clases: {num_training_classes})")
             else:
-                # Validar que el objetivo sea classification para criterios estándar
-                if self.model.objective not in ['classification', 'ArcFace']:
+                # Fallback a criterios estándar de torch.nn (CrossEntropyLoss, etc.)
+                if self.model.objective not in ['classification']:
                     logging.warning(
-                        f"Usando criterio '{criterion_name}' con objective='{self.model.objective}'. "
+                        f"Usando criterio '{loss_type}' con objective='{self.model.objective}'. "
                         "Considere usar un criterio de metric learning apropiado."
                     )
-                criterion_cls = getattr(torch.nn, criterion_name)
+                criterion_cls = getattr(torch.nn, loss_type)
                 criterion = criterion_cls()
+                logging.info(f"Criterio '{loss_type}' creado usando torch.nn")
             
             # Mover el criterio al dispositivo del modelo
             criterion.to(self.model.device)
             
             # Configurar optimizador con parámetros separados
             optimizer_type = self.config.get('finetune_optimizer_type', DEFAULT_FINETUNE_OPTIMIZER_TYPE)
-            base_lr = self.config.get('finetune_backbone_lr', DEFAULT_BACKBONE_LR)
-            head_lr = self.config.get('finetune_head_lr', DEFAULT_HEAD_LR)
-            weight_decay = self.config.get('finetune_optimizer_weight_decay', DEFAULT_WEIGHT_DECAY)
+            base_lr = float(self.config.get('finetune_backbone_lr', DEFAULT_BACKBONE_LR))
+            head_lr = float(self.config.get('finetune_head_lr', DEFAULT_HEAD_LR))
+            weight_decay = float(self.config.get('finetune_optimizer_weight_decay', DEFAULT_WEIGHT_DECAY))
             
             optimizer_cls = getattr(torch.optim, optimizer_type)
             
@@ -393,8 +449,8 @@ class FineTuningPipeline:
                 
                 # Crear optimizador específico para esta fase con su LR
                 phase_type = phase_params.get('type', 'text')
-                phase_lr = phase_params.get('lr', 1e-5)
-                phase_num_vision_layers = phase_params.get('num_vision_layers', 1)
+                phase_lr = float(phase_params.get('lr', 1e-5))
+                phase_num_vision_layers = int(phase_params.get('num_vision_layers', 1))
                 
                 optimizer_cls = getattr(torch.optim, optimizer_type)
                 optimizer = optimizer_cls(
@@ -407,10 +463,10 @@ class FineTuningPipeline:
                 training_history_phase = self.model.finetune_phase(
                     phase=phase_type,
                     optimizer=optimizer,
-                    epochs=phase_params.get('epochs', 5),
-                    warmup_steps=phase_params.get('warmup_steps', 200),
+                    epochs=int(phase_params.get('epochs', 5)),
+                    warmup_steps=int(phase_params.get('warmup_steps', 200)),
                     early_stopping=phase_params.get('early_stopping', None),
-                    save_best=phase_params.get('save_best', True),
+                    save_best=bool(phase_params.get('save_best', True)),
                     use_amp=use_amp,
                     num_vision_layers=phase_num_vision_layers
                 )
@@ -515,7 +571,19 @@ class FineTuningPipeline:
         
         # Guardar estadísticas del dataset
         if 'dataset_stats' in self.results:
-            stats_df = pd.DataFrame([self.results['dataset_stats']['overview']])
+            # Aplanar estadísticas anidadas para CSV
+            stats_flat = {}
+            for key, value in self.results['dataset_stats'].items():
+                if isinstance(value, dict):
+                    for subkey, subvalue in value.items():
+                        if isinstance(subvalue, dict):
+                            for subsubkey, subsubvalue in subvalue.items():
+                                stats_flat[f"{key}_{subkey}_{subsubkey}"] = subsubvalue
+                        else:
+                            stats_flat[f"{key}_{subkey}"] = subvalue
+                else:
+                    stats_flat[key] = value
+            stats_df = pd.DataFrame([stats_flat])
             stats_df.to_csv(experiment_dir / "dataset_stats.csv", index=False)
         
         # Crear archivo ZIP

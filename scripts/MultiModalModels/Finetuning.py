@@ -1,7 +1,7 @@
 """
-Script de Fine-Tuning para modelos de visión.
+Script de Fine-Tuning para modelos multimodales de visión y texto.
 
-Este script ejecuta el proceso completo de fine-tuning para los modelos ResNet50, ResNet101, ViTBase32 y ViTBase16
+Este script ejecuta el proceso completo de fine-tuning para los modelos multimodales (CLIP)
 usando configuración desde archivo YAML con logging detallado.
 """
 
@@ -20,13 +20,13 @@ if __name__ == "__main__":
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     logging.info("="*80)
-    logging.info("INICIANDO SCRIPT DE FINE-TUNING Modelos de Visión")
+    logging.info("INICIANDO SCRIPT DE FINE-TUNING Modelos Multimodales")
     logging.info("="*80)
 
     try:
         # Rutas de archivos
         dataset_csv_path = "dataset.csv" 
-        config_yaml_path = "configs/resnet18_metric_learning.yaml"
+        config_yaml_path = "configs/CLIP.yaml"
         
         # Cargar dataset
         logging.info(f"\n{'='*80}")
@@ -55,7 +55,7 @@ if __name__ == "__main__":
         pipeline = create_finetuning_pipeline(
             config=config,
             df=dataset_df,
-            model_type='vision'
+            model_type='multimodal'
         )
         
         logging.info("Pipeline creado exitosamente")

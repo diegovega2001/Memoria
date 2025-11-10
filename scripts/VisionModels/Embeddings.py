@@ -1,5 +1,5 @@
 """
-Script de Fine-Tuning para modelos de visión.
+Script de estudio de embeddings para modelos de visión.
 
 Este script ejecuta el proceso completo de fine-tuning para los modelos ResNet50, ResNet101, ViTBase32 y ViTBase16
 usando configuración desde archivo YAML con logging detallado.
@@ -10,8 +10,9 @@ import yaml
 import logging
 import sys
 
-from src.pipeline.FineTuningPipeline import create_finetuning_pipeline
+from src.pipeline.EmbeddingsPipeline import create_embeddings_pipeline
 
+FINETUNING_RESULTS_ZIP_PATH = "results/finetune_20251109_214801.zip"
 
 if __name__ == "__main__":
     # Configurar logging
@@ -20,13 +21,13 @@ if __name__ == "__main__":
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     logging.info("="*80)
-    logging.info("INICIANDO SCRIPT DE FINE-TUNING Modelos de Visión")
+    logging.info("INICIANDO SCRIPT DE ESTUDIO DE EMBEDDINGS Modelos de Visión")
     logging.info("="*80)
 
     try:
         # Rutas de archivos
         dataset_csv_path = "dataset.csv" 
-        config_yaml_path = "configs/resnet18_metric_learning.yaml"
+        config_yaml_path = "configs/resnet18_classification.yaml"
         
         # Cargar dataset
         logging.info(f"\n{'='*80}")
@@ -52,15 +53,14 @@ if __name__ == "__main__":
         logging.info("CREANDO PIPELINE")
         logging.info(f"{'='*80}")
         
-        pipeline = create_finetuning_pipeline(
+        pipeline = create_embeddings_pipeline(
             config=config,
-            df=dataset_df,
-            model_type='vision'
+            df=dataset_df
         )
         
         logging.info("Pipeline creado exitosamente")
         
-        results = pipeline.run_full_pipeline()
+        results = pipeline.run_full_analysis_from_zip(zip_path=FINETUNING_RESULTS_ZIP_PATH)
         
         logging.info(f"\n{'='*80}")
         logging.info("SCRIPT FINALIZADO CORRECTAMENTE")

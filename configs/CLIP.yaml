@@ -1,0 +1,82 @@
+# ===== DATASET =====
+views: ['front', 'rear']
+class_granularity: 'model+year'
+min_images: 10
+train_ratio: 0.2
+val_ratio: 0.2
+test_ratio: 0.6
+seed: 3
+image_size: [224, 224]
+grayscale: false
+use_bbox: true
+augment: true
+include_oneshot_in_test: true
+oneshot_ratio: 0.01
+
+# Text descriptions for CLIP
+# Options: '' (basic), 'make', 'model', 'full'
+description_include: 'model'
+
+# ===== MODELO =====
+model_type: 'multimodal'
+model_name: 'clip-vit-base-patch32'
+objective: 'CLIP' 
+
+# ===== TRAINING =====
+sampling_strategy: 'standard'
+batch_size: 32
+num_workers: 0
+pin_memory: false
+device: 'cpu'
+
+# Fine-tuning optimizer settings
+finetune_optimizer_type: 'Adam'
+finetune_optimizer_weight_decay: 0
+
+# Mixed precision training
+use_amp: false
+
+# ===== CLIP FINE-TUNING PHASES =====
+clip_finetuning_phases:
+  phase_1_vision:
+    type: 'vision'
+    lr: 1e-2
+    epochs: 1
+    early_stopping: null
+    save_best: true
+    warmup_steps: 50
+    num_vision_layers: -1  
+  
+  phase_2_projection:
+    type: 'projection'
+    lr: 1e-2
+    epochs: 1
+    early_stopping: null
+    save_best: true
+    warmup_steps: 50
+  
+  phase_3_text:
+    type: 'text'
+    lr: 1e-2
+    epochs: 1
+    early_stopping: null
+    save_best: true
+    warmup_steps: 50
+  
+  phase_4_projection_refine:
+    type: 'projection_refine'
+    lr: 1e-2
+    epochs: 1
+    early_stopping: null
+    save_best: true
+    warmup_steps: 50
+
+# ===== EMBEDDINGS ANALYSIS =====
+reducer_trials: 1
+reducer_methods: ['pca', 'umap', 'tsne']
+clustering_trials: 10
+clustering_methods: ['dbscan', 'hdbscan', 'optics', 'agglomerative']
+n_jobs: -1
+use_incremental: true
+generate_visualizations: true
+save_all_clusters: false

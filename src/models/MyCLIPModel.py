@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import CLIPModel, CLIPProcessor, get_linear_schedule_with_warmup
 
-from .Criterions import ContrastiveLoss
+from .MetricLearningLosses import CLIPLoss
 
 from src.defaults import (
     DEFAULT_BATCH_SIZE, 
@@ -135,7 +135,7 @@ class MultiViewCLIPModel(nn.Module):
 
         # Inicialización del modelo CLIP
         self.model, self.processor = self._initialize_clip_model()
-        self.contrastive_criterion = ContrastiveLoss(clip=True)
+        self.contrastive_criterion = CLIPLoss()
 
         # Mover a dispositivo
         self.model.to(self.device)
@@ -333,14 +333,23 @@ class MultiViewCLIPModel(nn.Module):
         Descongela las últimas capas del vision encoder.
         
         Args:
-            num_layers: Número de capas finales a descongelar.
+            num_layers: Número de capas finales a descongelar. 
+                       Si es -1, descongela TODAS las capas del vision encoder.
         """
         self.freeze_all()
         vision_layers = self.model.vision_model.encoder.layers
-        for layer in vision_layers[-num_layers:]:
-            for param in layer.parameters():
+        
+        if num_layers == -1:
+            # Descongelar TODAS las capas del vision encoder
+            for param in self.model.vision_model.parameters():
                 param.requires_grad = True
-        logging.debug(f"Últimas {num_layers} capas del vision encoder descongeladas")
+            logging.info(f"TODAS las capas del vision encoder descongeladas ({len(vision_layers)} capas)")
+        else:
+            # Descongelar solo las últimas num_layers capas
+            for layer in vision_layers[-num_layers:]:
+                for param in layer.parameters():
+                    param.requires_grad = True
+            logging.debug(f"Últimas {num_layers} capas del vision encoder descongeladas")
 
     def get_trainable_params_count(self) -> Dict[str, int]:
         """
@@ -490,7 +499,7 @@ class MultiViewCLIPModel(nn.Module):
                 logits_per_image = (image_embeddings @ text_embeddings.t()) / temperature
                 logits_per_text = logits_per_image.t()
 
-                loss = self.contrastive_criterion(logits_per_image, logits_per_text, None)
+                loss = self.contrastive_criterion(logits_per_image, logits_per_text)
 
             # Backward pass con GradScaler si AMP está habilitado
             if use_amp and scaler is not None:
@@ -538,7 +547,7 @@ class MultiViewCLIPModel(nn.Module):
                 logits_per_image = (image_embeddings @ text_embeddings.t()) / temperature
                 logits_per_text = logits_per_image.t()
 
-                loss = self.contrastive_criterion(logits_per_image, logits_per_text, None)
+                loss = self.contrastive_criterion(logits_per_image, logits_per_text)
                 
                 total_loss += loss.item()
                 num_batches += 1
@@ -697,7 +706,7 @@ class MultiViewCLIPModel(nn.Module):
                 # Compute loss
                 logits_per_image = (image_embeddings @ text_embeddings.t()) / temperature
                 logits_per_text = logits_per_image.t()
-                loss = self.contrastive_criterion(logits_per_image, logits_per_text, labels)
+                loss = self.contrastive_criterion(logits_per_image, logits_per_text)
                 
                 total_loss += loss.item()
                 num_batches += 1
@@ -780,7 +789,8 @@ class MultiViewCLIPModel(nn.Module):
         return {
             'name': self.name,
             'model_name': self.model_name,
-            'num_classes': self.dataset.num_models,
+            'num_classes': self.dataset.get_num_classes_for_training(),
+            'num_total_classes': self.dataset.get_total_num_classes(),
             'device': str(self.device),
             'total_parameters': params_info['total'],
             'trainable_parameters': params_info['trainable'],

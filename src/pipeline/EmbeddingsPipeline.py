@@ -47,6 +47,25 @@ class EmbeddingsPipeline:
     
     Esta clase maneja el análisis completo de embeddings: extracción,
     reducción de dimensionalidad, clustering y visualización.
+    
+    Cambios principales:
+    - Dataset con splits porcentuales (train_ratio, val_ratio, test_ratio)
+    - Usa 'standard' sampling strategy para análisis de embeddings
+    - Compatible con embeddings de modelos fine-tuned con pytorch-metric-learning
+    
+    Example:
+        >>> config = {
+        ...     'min_images': 5,
+        ...     'train_ratio': 0.7,
+        ...     'val_ratio': 0.2,
+        ...     'test_ratio': 0.1,
+        ...     'views': ['front'],
+        ...     'seed': 3
+        ... }
+        >>> pipeline = EmbeddingsPipeline(config, dataframe)
+        >>> pipeline.create_dataset_for_labels()
+        >>> pipeline.load_embeddings_from_files('baseline.pt')
+        >>> results = pipeline.run_full_pipeline()
     """
     
     def __init__(
@@ -78,15 +97,24 @@ class EmbeddingsPipeline:
         logging.info(f"Inicializado EmbeddingsPipeline: {self.experiment_name}")
     
     def create_dataset_for_labels(self) -> None:
-        """Crea el dataset solo para obtener las etiquetas correctas."""
+        """
+        Crea el dataset solo para obtener las etiquetas correctas.
+        
+        Usa los nuevos parámetros porcentuales para crear el dataset.
+        """
         logging.info("Creando dataset para obtener etiquetas...")
         
         self.dataset_dict = create_car_dataset(
             df=self.df,
             views=self.config.get('views', ['front']),
-            min_images_for_abundant_class=self.config.get('min_images_for_abundant_class', 5),
+            min_images=self.config.get('min_images', 5),
+            train_ratio=self.config.get('train_ratio', 0.7),
+            val_ratio=self.config.get('val_ratio', 0.2),
+            test_ratio=self.config.get('test_ratio', 0.1),
+            batch_size=self.config.get('batch_size', 32),
+            num_workers=self.config.get('num_workers', 4),
             seed=self.config.get('seed', 3),
-            use_identity_sampler=False, 
+            sampling_strategy='standard',
             model_type='vision',
             description_include=''
         )
@@ -103,9 +131,12 @@ class EmbeddingsPipeline:
         self.baseline_labels = torch.tensor(labels)
         
         self.results['dataset_info'] = {
-            'num_models': self.dataset_dict['dataset'].num_models,
+            'num_training_classes': self.dataset_dict['dataset'].get_num_classes_for_training(),
+            'num_total_classes': self.dataset_dict['dataset'].get_total_num_classes(),
             'val_samples': len(self.dataset_dict['dataset'].val_samples),
-            'views': self.dataset_dict['dataset'].views
+            'views': self.dataset_dict['dataset'].views,
+            'num_regular_classes': len(self.dataset_dict['dataset'].regular_classes),
+            'num_oneshot_classes': len(self.dataset_dict['dataset'].oneshot_classes)
         }
         
         logging.info(f"Dataset creado - val samples: {len(self.dataset_dict['dataset'].val_samples)}")
@@ -298,6 +329,12 @@ class EmbeddingsPipeline:
                 seed=self.config.get('seed', 3)
             )
             
+            # Guardar visualizador para usar en save_results()
+            if phase == 'baseline':
+                self.baseline_visualizer = visualizer
+            elif phase == 'finetuned':
+                self.finetuned_visualizer = visualizer
+            
             # Estadísticas y resumen
             visualizer.print_cluster_statistics()
             summary_df = clustering.get_cluster_summary(best_clustering_method)
@@ -448,6 +485,36 @@ class EmbeddingsPipeline:
         if 'comparison' in self.results:
             comparison_df = pd.DataFrame([self.results['comparison']['performance_improvement']])
             comparison_df.to_csv(experiment_dir / "performance_comparison.csv", index=False)
+        
+        # Guardar visualizaciones de baseline si están disponibles
+        if hasattr(self, 'baseline_visualizer') and self.baseline_visualizer is not None:
+            try:
+                visualizations_dir = experiment_dir / "visualizations" / "baseline"
+                logging.info("Guardando visualizaciones baseline...")
+                saved_viz_files = self.baseline_visualizer.save_visualizations(
+                    visualizations_dir,
+                    n_pure_clusters=5,
+                    n_mixed_clusters=5,
+                    n_images_per_cluster=6
+                )
+                logging.info(f"Visualizaciones baseline guardadas: {list(saved_viz_files.keys())}")
+            except Exception as e:
+                logging.warning(f"No se pudieron guardar las visualizaciones baseline: {e}")
+        
+        # Guardar visualizaciones de finetuned si están disponibles
+        if hasattr(self, 'finetuned_visualizer') and self.finetuned_visualizer is not None:
+            try:
+                visualizations_dir = experiment_dir / "visualizations" / "finetuned"
+                logging.info("Guardando visualizaciones finetuned...")
+                saved_viz_files = self.finetuned_visualizer.save_visualizations(
+                    visualizations_dir,
+                    n_pure_clusters=5,
+                    n_mixed_clusters=5,
+                    n_images_per_cluster=6
+                )
+                logging.info(f"Visualizaciones finetuned guardadas: {list(saved_viz_files.keys())}")
+            except Exception as e:
+                logging.warning(f"No se pudieron guardar las visualizaciones finetuned: {e}")
         
         zip_path = save_dir / f"{self.experiment_name}.zip"
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:

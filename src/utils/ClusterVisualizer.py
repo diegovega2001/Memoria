@@ -204,9 +204,7 @@ class ClusterVisualizer:
         try:
             img_path = Path(image_path)
             if not img_path.is_absolute():
-                # Asumir que el path es relativo al directorio del dataset
-                base_path = Path("/Users/diegovega/Documents/Memoria/CompCars")
-                img_path = base_path / image_path
+                img_path = Path.cwd() / image_path
             
             img = mpimg.imread(img_path)
             return img
@@ -266,17 +264,17 @@ class ClusterVisualizer:
     def _plot_clusters_row(self, clusters: List[Tuple[int, Dict[str, Any]]],
                            indices_per_cluster: List[List[Union[int, tuple]]],
                            all_indices_per_cluster: List[List[int]],
-                           fig_title: str, is_pure: bool = False):
+                           fig_title: str, is_pure: bool = False, save_mode: bool = False):
         """Dibuja clusters en layout horizontal como en el standalone (clusters como filas)."""
         if len(clusters) == 0:
             logging.warning("No hay clusters para mostrar")
-            return
+            return None
 
         n_rows = len(clusters)  # Cada cluster es una fila
         n_cols = max(len(lst) for lst in indices_per_cluster) if indices_per_cluster else 0
         if n_cols == 0:
             logging.warning("No hay imágenes para mostrar")
-            return
+            return None
 
         logging.info(f"Visualizando {n_rows} clusters con hasta {n_cols} imágenes cada uno")
 
@@ -409,15 +407,19 @@ class ClusterVisualizer:
         
         logging.info(f"Visualización: {images_loaded}/{total_attempts} imágenes cargadas")
         plt.tight_layout()
-        plt.show()
+        
+        if not save_mode:
+            plt.show()
+        
+        return fig
 
-    def visualize_good_clusters(self, n_clusters: int, max_classes_per_cluster: int = 8):
+    def visualize_good_clusters(self, n_clusters: int, max_classes_per_cluster: int = 8, save_mode: bool = False):
         """Muestra clusters puros en layout horizontal (cada cluster es una fila)."""
         pure_clusters = [(cid, info) for cid, info in self.cluster_analysis.items() 
                         if info['is_pure']]
         if len(pure_clusters) == 0:
             logging.warning("No se encontraron clusters puros")
-            return
+            return None
 
         pure_clusters.sort(key=lambda x: x[1]['size'], reverse=True)
         selected = pure_clusters[:max(1, int(n_clusters))]
@@ -432,11 +434,12 @@ class ClusterVisualizer:
             indices_per_cluster.append(display_inds)
             all_indices_per_cluster.append(all_inds)
 
-        self._plot_clusters_row(selected, indices_per_cluster, all_indices_per_cluster,
+        fig = self._plot_clusters_row(selected, indices_per_cluster, all_indices_per_cluster,
                                fig_title="Clusters Puros",
-                               is_pure=True)
+                               is_pure=True, save_mode=save_mode)
+        return fig
 
-    def visualize_mixed_clusters(self, n_clusters: int, max_classes_per_cluster: int = 8):
+    def visualize_mixed_clusters(self, n_clusters: int, max_classes_per_cluster: int = 8, save_mode: bool = False):
         """Muestra clusters mixtos en layout horizontal (cada cluster es una fila)."""
         mixed_clusters = [
             (cid, info) for cid, info in self.cluster_analysis.items() 
@@ -454,7 +457,7 @@ class ClusterVisualizer:
                 logging.warning(
                     f"No hay clusters mixtos con ≤{max_classes_per_cluster} clases. "
                     f"El cluster con menos clases tiene {max_classes_found} clases.")
-            return
+            return None
 
         mixed_clusters.sort(key=lambda x: x[1]['n_unique_models'], reverse=True)
         selected = mixed_clusters[:max(1, int(n_clusters))]
@@ -469,9 +472,10 @@ class ClusterVisualizer:
             indices_per_cluster.append(samples)
             all_indices_per_cluster.append(all_inds)
 
-        self._plot_clusters_row(selected, indices_per_cluster, all_indices_per_cluster,
+        fig = self._plot_clusters_row(selected, indices_per_cluster, all_indices_per_cluster,
                                fig_title="Clusters Mixtos",
-                               is_pure=False)
+                               is_pure=False, save_mode=save_mode)
+        return fig
 
     def visualize_best_available_clusters(self, n_clusters: int = 3, 
                                          max_classes_per_cluster: int = 8):
@@ -549,3 +553,61 @@ class ClusterVisualizer:
             })
         df = pd.DataFrame(rows).sort_values('n_clusters', ascending=False)
         return df
+
+    def save_visualizations(
+        self,
+        output_dir: Union[str, Path],
+        n_pure_clusters: int = 15,
+        n_mixed_clusters: int = 15,
+        n_images_per_cluster: int = 10
+    ) -> Dict[str, Path]:
+        """
+        Guarda todas las visualizaciones en un directorio.
+        
+        Args:
+            output_dir: Directorio donde guardar las visualizaciones
+            n_pure_clusters: Número de clusters puros a visualizar
+            n_mixed_clusters: Número de clusters mixtos a visualizar
+            n_images_per_cluster: Número de imágenes por cluster
+            
+        Returns:
+            Diccionario con paths de archivos guardados
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        saved_files = {}
+        
+        # Visualizar y guardar clusters buenos/puros
+        try:
+            fig = self.visualize_good_clusters(
+                n_clusters=n_pure_clusters,
+                max_classes_per_cluster=n_images_per_cluster,
+                save_mode=True
+            )
+            if fig is not None:
+                pure_path = output_dir / "good_clusters.png"
+                fig.savefig(pure_path, dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                saved_files['good_clusters'] = pure_path
+                logging.info(f"Clusters buenos guardados en: {pure_path}")
+        except Exception as e:
+            logging.warning(f"No se pudieron guardar clusters buenos: {e}")
+        
+        # Visualizar y guardar clusters mixtos
+        try:
+            fig = self.visualize_mixed_clusters(
+                n_clusters=n_mixed_clusters,
+                max_classes_per_cluster=n_images_per_cluster,
+                save_mode=True
+            )
+            if fig is not None:
+                mixed_path = output_dir / "mixed_clusters.png"
+                fig.savefig(mixed_path, dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                saved_files['mixed_clusters'] = mixed_path
+                logging.info(f"Clusters mixtos guardados en: {mixed_path}")
+        except Exception as e:
+            logging.warning(f"No se pudieron guardar clusters mixtos: {e}")
+        
+        return saved_files

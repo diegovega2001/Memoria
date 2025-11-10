@@ -13,7 +13,6 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from .Criterions import TripletLoss, ContrastiveLoss, ArcFaceLayer, ArcFaceInference
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,6 +20,8 @@ import torchvision.models as models
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
+from pytorch_metric_learning.utils import inference
+from pytorch_metric_learning.distances import CosineSimilarity, LpDistance
 
 from src.defaults import (
     DEFAULT_BATCH_SIZE, 
@@ -33,7 +34,6 @@ from src.defaults import (
     DEFAULT_FINETUNE_OPTIMIZER_TYPE,
     DEFAULT_FINETUNE_EPOCHS,
     DEFAULT_WEIGHTS_FILENAME,
-    DEFAULT_OUTPUT_EMBEDDING_DIM,
     DEFAULT_USE_AMP,
     SUPPORTED_MODEL_ATTRIBUTES,
     MODEL_CONFIGS
@@ -70,7 +70,7 @@ class MultiViewVisionModel(nn.Module):
         batch_size: Tamaño de batch para entrenamiento.
         model: Modelo base de torchvision.
         embedding_dim: Dimensión de los embeddings del modelo base.
-        head_layer: Capa final para clasificación, metric learning o ArcFace.
+        head_layer: Capa final para clasificación o metric learning.
         train_loader: DataLoader para entrenamiento.
         val_loader: DataLoader para validación.
         test_loader: DataLoader para prueba.
@@ -147,18 +147,15 @@ class MultiViewVisionModel(nn.Module):
         self.embedding_dim = self._extract_embedding_dimension()
         self._replace_final_layer()
 
-        # Inicializar capa adcional según el objetivo
+        # Inicializar capa adicional según el objetivo
         self.head_layer = None
         
         if self.objective == 'classification':
             self.head_layer = self._create_classification_layer()
         elif self.objective == 'metric_learning':
-            self.head_layer = self._create_embedding_projection()
-        elif self.objective == 'ArcFace':
-            self.head_layer = nn.Sequential(self._create_embedding_projection(),
-                                            self._create_arcface_layer())
+            self.head_layer = nn.Identity()
         else:
-            raise ValueError("objetive debe ser classifcation o metric_learning")
+            raise ValueError(f"objective debe ser 'classification' o 'metric_learning', recibido: '{self.objective}'")
 
         # Mover a dispositivo
         self.model.to(self.device)
@@ -166,7 +163,9 @@ class MultiViewVisionModel(nn.Module):
 
         logging.info(f"Inicializado {self.__class__.__name__}: {self.name}")
         logging.info(f"Modelo base: {self.model_name} con pesos {self.weights}")
-        logging.info(f"Objetivo: {self.objective}, Embedding dim: {self.embedding_dim}, Clases: {self.dataset.num_classes}")
+        logging.info(f"Objetivo: {self.objective}, Embedding dim: {self.embedding_dim}, "
+                    f"Clases entrenamiento: {self.dataset.get_num_classes_for_training()}, "
+                    f"Clases totales: {self.dataset.get_total_num_classes()}")
 
     def _validate_parameters(
         self,
@@ -235,7 +234,6 @@ class MultiViewVisionModel(nn.Module):
         for attr_name in SUPPORTED_MODEL_ATTRIBUTES:
             if hasattr(self.model, attr_name):
                 layer = getattr(self.model, attr_name)
-                
                 # Casos comunes
                 if hasattr(layer, 'in_features'):
                     return layer.in_features
@@ -279,7 +277,9 @@ class MultiViewVisionModel(nn.Module):
         """
         # Dimensión de entrada: embedding_dim * número de vistas
         input_dim = self.embedding_dim * self.dataset.num_views
-        output_dim = self.dataset.num_classes
+        
+        # Output: Solo clases regulares (para entrenamiento)
+        output_dim = self.dataset.get_num_classes_for_training()
         
         # Creación de la capa de clasificación
         classification_layer = nn.Linear(input_dim, output_dim)
@@ -287,59 +287,8 @@ class MultiViewVisionModel(nn.Module):
         # Inicialización Xavier
         nn.init.xavier_uniform_(classification_layer.weight)
         nn.init.zeros_(classification_layer.bias)
-
-        logging.debug(f"Capa de clasificación creada: {input_dim} → {output_dim}")
+        logging.debug(f"Capa de clasificación creada: {input_dim} → {output_dim} (solo clases regulares)")
         return classification_layer
-
-    def _create_embedding_projection(self) -> nn.Module:
-        """
-        Crea una capa de proyección para ajustar el tamaño de embeddings.
-        
-        Returns:
-            Capa de proyección para embeddings.
-        """
-        # Dimensión de entrada: embedding_dim * número de vistas
-        input_dim = self.embedding_dim * self.dataset.num_views
-        output_dim = DEFAULT_OUTPUT_EMBEDDING_DIM
-        
-        # Creación de la capa de proyección de embeddings 
-        projection_layer = nn.Sequential(
-            nn.Linear(input_dim, output_dim),
-            nn.BatchNorm1d(output_dim),
-            nn.ReLU(inplace=True),            
-            nn.Dropout(p=0.3),
-            nn.Linear(output_dim, output_dim),
-            nn.BatchNorm1d(output_dim)
-        )
-        
-        # Inicialización Xavier
-        for layer in projection_layer:
-            if isinstance(layer, nn.Linear):
-                nn.init.xavier_uniform_(layer.weight)
-                nn.init.zeros_(layer.bias)
-        
-        logging.debug(f"Capa de proyección creada: {input_dim} → {output_dim}")
-        return projection_layer
-
-    def _create_arcface_layer(self) -> ArcFaceLayer:
-        """
-        Crea una capa ArcFace para metric learning
-        
-        Args:
-            scale: Factor de escala para ArcFace.
-            margin: Margen angular para ArcFace.
-            
-        Returns:
-            Instancia de ArcFaceLayer configurada.
-        """
-        
-        # Creación de la capa ArcFace
-        arcface_layer = ArcFaceLayer(
-            embedding_dim=DEFAULT_OUTPUT_EMBEDDING_DIM,
-            num_classes=self.dataset.num_classes,
-        )
-        logging.debug(f"Capa ArcFace creada: dim={DEFAULT_OUTPUT_EMBEDDING_DIM}, clases={self.dataset.num_classes}")
-        return arcface_layer
 
     def extract_embeddings(
         self,
@@ -468,9 +417,9 @@ class MultiViewVisionModel(nn.Module):
             best_val_loss = float('inf')
             best_epoch = 0
             patience_counter = 0
-            
+
             # Para guardar el mejor estado del modelo
-            best_model_sate = None
+            best_model_state = None
             best_head_state = None
 
             # Scheduler de warmup si se especifica
@@ -525,8 +474,8 @@ class MultiViewVisionModel(nn.Module):
                     f'Val Loss: {val_loss:.4f}'
                 )
                 
-                # Solo mostrar accuracy si es significativa (classification o ArcFace)
-                if self.objective in ['classification', 'ArcFace']:
+                # Solo mostrar accuracy si es significativa (classification)
+                if self.objective in ['classification']:
                     log_msg += f' | Val Acc: {val_accuracy:.2f}%'
                 
                 # Mostrar Recall@K para metric learning
@@ -595,93 +544,6 @@ class MultiViewVisionModel(nn.Module):
             return float(current_epoch + 1) / warmup_epochs if current_epoch < warmup_epochs else 1.0
         
         return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-    
-    def _predict_by_similarity(self, embeddings: torch.Tensor) -> torch.Tensor:
-        """
-        Predice clases usando similitud con centroides de clase.
-        
-        Args:
-            embeddings: Embeddings a predecir (del val/test loader).
-            
-        Returns:
-            Predicciones basadas en similitud con centroides del conjunto de entrenamiento.
-        """
-        # Calcular centroides de clase desde el train loader
-        class_embeddings = {}
-        
-        self.model.eval()
-        with torch.no_grad():
-            for batch in self.train_loader:
-                images = batch['images'].to(self.device)
-                labels = batch['labels']
-                
-                # Usar el método forward que maneja múltiples vistas correctamente
-                batch_embeddings = self.forward(images)
-                
-                # Proyectar si es metric_learning
-                if self.objective == 'metric_learning':
-                    batch_embeddings = self.head_layer(batch_embeddings)
-                
-                batch_embeddings = batch_embeddings.cpu()
-                
-                # Acumular por clase
-                for emb, label in zip(batch_embeddings, labels):
-                    label_item = label.item()
-                    if label_item not in class_embeddings:
-                        class_embeddings[label_item] = []
-                    class_embeddings[label_item].append(emb)
-        
-        # Calcular centroides
-        centroids = {}
-        for label, emb_list in class_embeddings.items():
-            centroids[label] = torch.stack(emb_list).mean(dim=0)
-        
-        # Crear matriz de centroides ordenada por clase
-        sorted_labels = sorted(centroids.keys())
-        centroid_matrix = torch.stack([centroids[label] for label in sorted_labels])
-        
-        # Normalizar para cosine similarity
-        embeddings_norm = F.normalize(embeddings, p=2, dim=1)
-        centroid_matrix_norm = F.normalize(centroid_matrix, p=2, dim=1)
-        
-        # Calcular similitud
-        similarity = torch.mm(embeddings_norm, centroid_matrix_norm.t())
-        
-        # Predecir clase con mayor similitud
-        _, predicted_indices = similarity.max(dim=1)
-        predictions = torch.tensor([sorted_labels[idx] for idx in predicted_indices])
-        
-        return predictions
-    
-    def _recall_at_k(self, embeddings: torch.Tensor, labels: torch.Tensor, ks=(1, 5)) -> Dict[int, float]:
-        """
-        Calcula Recall@K para embeddings de validación.
-
-        Args:
-            embeddings: Tensor (N, D) con embeddings normalizados.
-            labels: Tensor (N,) con etiquetas.
-            ks: Tuplas de valores de K a evaluar.
-
-        Returns:
-            Diccionario {K: recall@K}
-        """
-        recalls = {}
-        embeddings = F.normalize(embeddings, p=2, dim=1)  
-        sim_matrix = torch.matmul(embeddings, embeddings.t())
-
-        # Evitar auto-similitud
-        sim_matrix.fill_diagonal_(-float("inf"))
-
-        # Para cada fila, obtener topK vecinos
-        for k in ks:
-            topk = sim_matrix.topk(k, dim=1).indices  # (N, K)
-            topk_labels = labels[topk]  # Etiquetas de los vecinos
-
-            # Éxito si al menos 1 vecino comparte clase
-            correct = (topk_labels == labels.unsqueeze(1)).any(dim=1).float()
-            recalls[k] = correct.mean().item() * 100  # En %
-
-        return recalls
 
     def _train_epoch(
         self,
@@ -718,82 +580,14 @@ class MultiViewVisionModel(nn.Module):
                     # Concatenar vistas (no promediar) para preservar información
                     embeddings = features.flatten(start_dim=1)  # [B, V*embedding_dim]  
                 
-                    # Calcular pérdida y accuracy según el objetivo
+                    # Calcular pérdida según el objetivo
                     if self.objective == 'classification':
                         outputs = self.head_layer(embeddings)
                         loss = criterion(outputs, labels)
-                    elif self.objective == 'ArcFace':
-                        projection_layer, arcface_layer = self.head_layer
-                        embeddings = projection_layer(embeddings)
-                        logits = arcface_layer(embeddings, labels)
-                        loss = criterion(logits, labels)               
                     elif self.objective == 'metric_learning':
-                        # Proyectar embeddings a través de head_layer
-                        projected_embeddings = self.head_layer(embeddings)
-                
-                        if isinstance(criterion, TripletLoss):
-                            # Para TripletLoss, necesitamos hacer hard negative mining
-                            # Crear tripletas (anchor, positive, negative) del batch
-                            batch_size = projected_embeddings.size(0)
-                            
-                            # Calcular matriz de distancias para mining
-                            dist_matrix = torch.cdist(projected_embeddings, projected_embeddings, p=2)
-                            
-                            anchors, positives, negatives = [], [], []
-                            for i in range(batch_size):
-                                # Mask de muestras de la misma clase (excluyendo el anchor mismo)
-                                pos_mask = (labels == labels[i]) & (torch.arange(batch_size, device=labels.device) != i)
-                                # Mask de muestras de diferente clase
-                                neg_mask = labels != labels[i]
-                                
-                                if pos_mask.any() and neg_mask.any():
-                                    # Hard positive: el más lejano de la misma clase
-                                    hardest_pos_idx = dist_matrix[i][pos_mask].argmax()
-                                    pos_idx = torch.where(pos_mask)[0][hardest_pos_idx]
-                                    
-                                    # Hard negative: el más cercano de diferente clase
-                                    hardest_neg_idx = dist_matrix[i][neg_mask].argmin()
-                                    neg_idx = torch.where(neg_mask)[0][hardest_neg_idx]
-                                    
-                                    anchors.append(projected_embeddings[i])
-                                    positives.append(projected_embeddings[pos_idx])
-                                    negatives.append(projected_embeddings[neg_idx])
-                            
-                            if len(anchors) > 0:
-                                anchor_batch = torch.stack(anchors)
-                                positive_batch = torch.stack(positives)
-                                negative_batch = torch.stack(negatives)
-                                # Usar el forward del criterion directamente
-                                loss = criterion(anchor_batch, positive_batch, negative_batch)
-                            else:
-                                # Si no hay tripletas válidas en este batch
-                                loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-                        
-                        elif isinstance(criterion, ContrastiveLoss):
-                            # Para ContrastiveLoss (modo tradicional), crear pares
-                            batch_size = projected_embeddings.size(0)
-                            pairs_1, pairs_2, pair_labels = [], [], []
-                            
-                            for i in range(batch_size):
-                                for j in range(i + 1, batch_size):
-                                    pairs_1.append(projected_embeddings[i])
-                                    pairs_2.append(projected_embeddings[j])
-                                    # Label: 0 si misma clase, 1 si diferente clase
-                                    pair_labels.append(0 if labels[i] == labels[j] else 1)
-                            
-                            if len(pairs_1) > 0:
-                                pairs_1_batch = torch.stack(pairs_1)
-                                pairs_2_batch = torch.stack(pairs_2)
-                                pair_labels_batch = torch.tensor(pair_labels, device=self.device, dtype=torch.float)
-                                # Usar el forward del criterion directamente
-                                loss = criterion(pairs_1_batch, pairs_2_batch, pair_labels_batch)
-                            else:
-                                loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-                        
-                        else:
-                            raise VisionModelError("Función de pérdida no soportada para metric_learning.")
+                        loss = criterion(embeddings, labels)
                     else:
-                        raise VisionModelError(f"Objetivo '{self.objective}' no reconocido.")
+                        raise VisionModelError(f"Objetivo '{self.objective}' no reconocido")
 
                 if use_amp and scaler is not None:
                     scaler.scale(loss).backward()
@@ -851,90 +645,18 @@ class MultiViewVisionModel(nn.Module):
                     # Concatenar vistas (no promediar) para preservar información
                     embeddings = features.flatten(start_dim=1)  # [B, V*embedding_dim]
                     
-                    # Calcular pérdida y accuracy según el objetivo
+                    # Calcular pérdida según el objetivo
                     if self.objective == 'classification':
                         outputs = self.head_layer(embeddings)
                         loss = criterion(outputs, labels)
                         _, predicted = outputs.max(1)
-                        # Guardar embeddings sin proyección para recalls
+                    elif self.objective == 'metric_learning':
+                        loss = criterion(embeddings, labels)
+                        predicted = torch.zeros_like(labels)
                         all_embeddings.append(embeddings.cpu())
                         all_labels.append(labels.cpu())
-                    elif self.objective == 'ArcFace':
-                        projection_layer, arcface_layer = self.head_layer
-                        embeddings = projection_layer(embeddings)
-                        logits = arcface_layer(embeddings, labels)
-                        loss = criterion(logits, labels)
-                        # Para accuracy, usar ArcFaceInference 
-                        arcface_inf = ArcFaceInference(
-                            weight=arcface_layer.weight,
-                            scale=arcface_layer.scale
-                        )
-                        inference_logits = arcface_inf(embeddings)
-                        _, predicted = inference_logits.max(1)
-                    elif self.objective == 'metric_learning':
-                        # Proyectar embeddings a través de head_layer
-                        projected_embeddings = self.head_layer(embeddings)
-                            
-                        if isinstance(criterion, TripletLoss):
-                            # Calcular loss con hard mining 
-                            batch_size = projected_embeddings.size(0)
-                            dist_matrix = torch.cdist(projected_embeddings, projected_embeddings, p=2)
-                            
-                            anchors, positives, negatives = [], [], []
-                            for i in range(batch_size):
-                                pos_mask = (labels == labels[i]) & (torch.arange(batch_size, device=labels.device) != i)
-                                neg_mask = labels != labels[i]
-                                
-                                if pos_mask.any() and neg_mask.any():
-                                    hardest_pos_idx = dist_matrix[i][pos_mask].argmax()
-                                    pos_idx = torch.where(pos_mask)[0][hardest_pos_idx]
-                                    hardest_neg_idx = dist_matrix[i][neg_mask].argmin()
-                                    neg_idx = torch.where(neg_mask)[0][hardest_neg_idx]
-                                    
-                                    anchors.append(projected_embeddings[i])
-                                    positives.append(projected_embeddings[pos_idx])
-                                    negatives.append(projected_embeddings[neg_idx])
-                            
-                            if len(anchors) > 0:
-                                loss = criterion(torch.stack(anchors), torch.stack(positives), torch.stack(negatives))
-                            else:
-                                loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-                            
-                            # Placeholder para accuracy 
-                            predicted = torch.zeros_like(labels)
-
-                        elif isinstance(criterion, ContrastiveLoss):
-                            # Calcular loss con pares 
-                            batch_size = projected_embeddings.size(0)
-                            pairs_1, pairs_2, pair_labels = [], [], []
-                            
-                            for i in range(batch_size):
-                                for j in range(i + 1, batch_size):
-                                    pairs_1.append(projected_embeddings[i])
-                                    pairs_2.append(projected_embeddings[j])
-                                    pair_labels.append(0 if labels[i] == labels[j] else 1)
-                            
-                            if len(pairs_1) > 0:
-                                loss = criterion(
-                                    torch.stack(pairs_1), 
-                                    torch.stack(pairs_2), 
-                                    torch.tensor(pair_labels, device=self.device, dtype=torch.float)
-                                )
-                            else:
-                                loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-                            
-                            # Placeholder para accuracy 
-                            predicted = torch.zeros_like(labels)
-                            
-                        else:
-                            raise VisionModelError("Función de pérdida no soportada para metric_learning.")
-                        
-                        # Guardar embeddings proyectados para recalls
-                        all_embeddings.append(projected_embeddings.cpu())
-                        all_labels.append(labels.cpu())
-                    
                     else:
-                        raise VisionModelError(f"Objetivo '{self.objective}' no reconocido.")
+                        raise VisionModelError(f"Objetivo '{self.objective}' no reconocido")
 
                     total_loss += loss.item()
                     
@@ -948,25 +670,32 @@ class MultiViewVisionModel(nn.Module):
         avg_loss = total_loss / len(self.val_loader)
 
         if self.objective == 'metric_learning':
-            accuracy = 0.0  # No significativa para Triplet/Contrastive
+            # No calculamos accuracy aquí, solo loss
+            # Las métricas de recall se calculan con evaluate() si se necesita
+            accuracy = 0.0
         else:
             accuracy = 100 * correct / total_samples
         
-        recalls = {}
-        if self.objective == 'metric_learning':
-            all_embeddings = torch.cat(all_embeddings, dim=0)
-            all_labels = torch.cat(all_labels, dim=0)
-            recalls = self._recall_at_k(all_embeddings, all_labels, ks=(1, 5))
+        recalls = {}  # Puede calcularse con evaluate() después si se necesita
 
         return avg_loss, accuracy, recalls
 
-    def evaluate(self, dataloader: Optional[DataLoader] = None, use_similarity: bool = None) -> Dict[str, float]:
+    def evaluate(
+        self, 
+        dataloader: Optional[DataLoader] = None,
+        distance_metric: str = 'cosine',
+        k_values: List[int] = [1, 5, 10]
+    ) -> Dict[str, float]:
         """
-        Evalúa el modelo en un conjunto de datos.
+        Evalúa el modelo usando pytorch-metric-learning inference.
+
+        Para classification: usa accuracy estándar.
+        Para metric_learning: usa KNN con pytorch_metric_learning.utils.inference.
 
         Args:
             dataloader: DataLoader a evaluar. Si None, usa val_loader.
-            use_similarity: Si usar predicción por similitud con centroides del train set. Si None, se decide automáticamente.
+            distance_metric: Métrica de distancia ('cosine' o 'euclidean').
+            k_values: Valores de K para calcular precision@K y recall@K.
 
         Returns:
             Diccionario con métricas de evaluación.
@@ -978,19 +707,15 @@ class MultiViewVisionModel(nn.Module):
         if self.head_layer is not None:
             self.head_layer.eval()
 
-        all_embeddings = []
-        all_labels = []
-
-        # Decidir método de predicción
-        if use_similarity is None:
-            use_similarity = (self.objective == 'metric_learning')
+        # Extraer embeddings del query set (val/test)
+        query_embeddings = []
+        query_labels = []
 
         with torch.no_grad():
-            for batch in tqdm(dataloader, desc='Evaluating', leave=False):
+            for batch in tqdm(dataloader, desc='Extracting query embeddings', leave=False):
                 images = batch['images'].to(self.device)
-                labels = batch['labels'].to(self.device)
+                labels = batch['labels']
 
-                # Extraer embeddings
                 # Manejar múltiples vistas
                 if images.ndim == 4:
                     images = images.unsqueeze(1)
@@ -999,62 +724,105 @@ class MultiViewVisionModel(nn.Module):
                 images_reshaped = images.view(B * V, C, H, W)
                 features = self.model(images_reshaped)
                 features = features.view(B, V, -1)
-                # Concatenar vistas (no promediar) para preservar información
-                embeddings = features.flatten(start_dim=1)  # [B, V*embedding_dim]
-                
-                # Si es metric_learning, proyectar embeddings
-                if self.objective == 'metric_learning':
-                    embeddings = self.head_layer(embeddings)
-                elif self.objective == 'ArcFace':
-                    projection_layer = self.head_layer[0]
-                    embeddings = projection_layer(embeddings)
+                embeddings = features.flatten(start_dim=1)
                     
-                all_embeddings.append(embeddings.cpu())
-                all_labels.append(labels.cpu())
+                query_embeddings.append(embeddings.cpu())
+                query_labels.append(labels)
 
-            all_embeddings = torch.cat(all_embeddings, dim=0)
-            all_labels = torch.cat(all_labels, dim=0)
+        query_embeddings = torch.cat(query_embeddings, dim=0)
+        query_labels = torch.cat(query_labels, dim=0)
 
-            # Realizar predicción según el método
-            if use_similarity:
-                # Metric learning: usar predicción por similitud con centroides
-                predicted = self._predict_by_similarity(all_embeddings)
-                accuracy = 100.0 * (predicted == all_labels).float().mean().item()
-                
-                return {
-                    'accuracy': accuracy,
-                    'total_samples': len(all_labels),
-                    'predictions': predicted.numpy(),
-                    'labels': all_labels.numpy(),
-                    'method': 'similarity_centroids_from_train'
-                }
+        # Evaluación según objective
+        if self.objective == 'classification':
+            # Classification: accuracy estándar
+            outputs = self.head_layer(query_embeddings.to(self.device))
+            _, predicted = outputs.max(1)
+            predicted = predicted.cpu()
+
+            correct = (predicted == query_labels).sum().item()
+            accuracy = 100 * correct / len(query_labels)
+            
+            return {
+                'accuracy': accuracy,
+                'correct': correct,
+                'total': len(query_labels),
+                'method': 'classification'
+            }
+        
+        elif self.objective == 'metric_learning':
+            # Metric Learning: usar pytorch-metric-learning.utils.inference
+            # Crear función de embedding que usa nuestro modelo
+            def embedding_func(images):
+                """Función wrapper para extraer embeddings."""
+                with torch.no_grad():
+                    if images.ndim == 4:
+                        images = images.unsqueeze(1)
+                    
+                    B, V, C, H, W = images.shape
+                    images_reshaped = images.view(B * V, C, H, W)
+                    features = self.model(images_reshaped)
+                    features = features.view(B, V, -1)
+                    embeddings = features.flatten(start_dim=1)
+                    return embeddings
+
+            # Configurar métrica de distancia
+            if distance_metric == 'cosine':
+                distance = CosineSimilarity()
+            elif distance_metric == 'euclidean':
+                distance = LpDistance(p=2, normalize_embeddings=False)
             else:
-                if self.objective == 'ArcFace':
-                    # Usar ArcFaceInference para predicción sin labels
-                    arcface_layer = self.head_layer[1]
-                    arcface_inf = ArcFaceInference(
-                        weight=arcface_layer.weight,
-                        scale=arcface_layer.scale
-                    )
-                    logits = arcface_inf(all_embeddings.to(self.device))
-                    _, predicted = logits.max(1)
-                    predicted = predicted.cpu()
-                else:
-                    # Clasificación estándar
-                    outputs = self.head_layer(all_embeddings.to(self.device))
-                    _, predicted = outputs.max(1)
-                    predicted = predicted.cpu()
+                raise ValueError(f"Métrica de distancia no soportada: {distance_metric}")
+            
+            # Extraer embeddings de referencia (train set)
+            reference_embeddings = []
+            reference_labels = []
+            
+            with torch.no_grad():
+                for batch in tqdm(self.train_loader, desc='Extracting reference embeddings', leave=False):
+                    images = batch['images'].to(self.device)
+                    labels = batch['labels']
+                    emb = embedding_func(images)
+                    reference_embeddings.append(emb.cpu())
+                    reference_labels.append(labels)
 
-                correct = (predicted == all_labels).sum().item()
-                accuracy = 100 * correct / len(all_labels) if len(all_labels) > 0 else 0.0
-                return {
-                    'accuracy': accuracy,
-                    'correct': correct,
-                    'total': len(all_labels),
-                    'predictions': predicted.numpy(),
-                    'labels': all_labels.numpy(),
-                    'method': 'classification'
-                }
+            reference_embeddings = torch.cat(reference_embeddings, dim=0)
+            reference_labels = torch.cat(reference_labels, dim=0)
+
+            # Normalizar embeddings si es cosine
+            if distance_metric == 'cosine':
+                query_embeddings = F.normalize(query_embeddings, p=2, dim=1)
+                reference_embeddings = F.normalize(reference_embeddings, p=2, dim=1)
+
+            # Calcular matriz de distancias usando pytorch-metric-learning
+            dist_matrix = distance(query_embeddings, reference_embeddings)
+            
+            # Para cada query, obtener top-K vecinos más cercanos
+            results = {
+                'method': 'metric_learning_inference',
+                'distance_metric': distance_metric,
+                'num_reference': len(reference_labels),
+                'num_query': len(query_labels)
+            }
+            
+            max_k = max(k_values)
+            _, indices = torch.topk(dist_matrix, k=max_k, dim=1, largest=False)
+            
+            for k in k_values:
+                topk_indices = indices[:, :k]
+                topk_labels = reference_labels[topk_indices]
+                correct = (topk_labels == query_labels.unsqueeze(1)).any(dim=1).float()
+                recall = correct.mean().item() * 100
+                results[f'recall@{k}'] = recall
+            
+            # Accuracy como recall@1
+            results['accuracy'] = results.get('recall@1', 0.0)
+            
+            return results
+        
+        else:
+            raise VisionModelError(f"Objective '{self.objective}' no reconocido")
+    
+
 
     def save_model(self, save_path: Union[str, Path], **kwargs) -> None:
         """
@@ -1078,7 +846,7 @@ class MultiViewVisionModel(nn.Module):
                 'model_name': self.model_name,
                 'weights': self.weights,
                 'embedding_dim': self.embedding_dim,
-                'num_classes': self.dataset.num_classes,
+                'num_classes': self.dataset.get_num_classes_for_training(),
                 'num_views': self.dataset.num_views
             },
             'metadata': kwargs
@@ -1115,9 +883,10 @@ class MultiViewVisionModel(nn.Module):
 
             # Verificar compatibilidad
             config = checkpoint.get('model_config', {})
-            if config.get('num_classes') != self.dataset.num_classes:
+            num_training_classes = self.dataset.get_num_classes_for_training()
+            if config.get('num_classes') != num_training_classes:
                 logging.warning(
-                    f"Número de clases no coincide: {config.get('num_classes')} vs {self.dataset.num_classes}"
+                    f"Número de clases no coincide: {config.get('num_classes')} vs {num_training_classes}"
                 )
 
             logging.info(f"Modelo cargado desde: {model_path}")
@@ -1203,7 +972,8 @@ class MultiViewVisionModel(nn.Module):
             'device': str(self.device),
             'batch_size': self.batch_size,
             'embedding_dim': self.embedding_dim,
-            'num_classes': self.dataset.num_classes,
+            'num_classes': self.dataset.get_num_classes_for_training(),
+            'num_total_classes': self.dataset.get_total_num_classes(),
             'num_views': self.dataset.num_views,
             'total_parameters': sum(p.numel() for p in self.parameters()),
             'trainable_parameters': sum(p.numel() for p in self.parameters() if p.requires_grad),
