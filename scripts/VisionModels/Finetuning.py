@@ -26,7 +26,7 @@ if __name__ == "__main__":
     try:
         # Rutas de archivos
         dataset_csv_path = "dataset.csv" 
-        config_yaml_path = "configs/resnet18_metric_learning.yaml"
+        config_yaml_path = "configs/vitb32_metric_learning.yaml"
         
         # Cargar dataset
         logging.info(f"\n{'='*80}")

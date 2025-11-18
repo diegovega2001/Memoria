@@ -1,0 +1,61 @@
+# ===== DATASET =====
+views: ['front', 'rear']
+class_granularity: 'model+year'
+min_images: 8
+train_ratio: 0.7
+val_ratio: 0.15
+test_ratio: 0.15
+seed: 3
+image_size: [224, 224]
+grayscale: true
+use_bbox: true
+augment: true
+include_oneshot_in_test: true
+oneshot_ratio: 1.0
+
+# ===== MODELO =====
+model_type: 'vision'
+model_name: 'resnet50'
+weights: 'IMAGENET1K_V1'
+objective: 'metric_learning' 
+
+# ===== TRAINING =====
+sampling_strategy: 'pk'
+batch_size: 128
+P: 16
+K: 8
+num_workers: 2
+pin_memory: true
+device: 'cuda'
+
+# Fine-tuning
+finetune_epochs: 120
+finetune_criterion: 'triplet'
+finetune_backbone_lr: 1.0e-6
+finetune_head_lr: 0.0
+finetune_optimizer_weight_decay: 1.0e-2
+
+# Scheduler
+use_scheduler: true
+scheduler_type: 'cosine_warmup'
+warmup_epochs: 25
+
+# Early stopping
+use_early_stopping: True
+patience: 30
+
+# Gradient clipping
+gradient_clip_value: 1.0
+
+# Mixed precision training
+use_amp: True
+
+# Embeddings analysis
+reducer_trials: 50
+reducer_methods: ['pca', 'umap', 'tsne']
+clustering_trials: 200
+clustering_methods: ['dbscan', 'hdbscan', 'optics', 'agglomerative']
+n_jobs: -1
+use_incremental: true
+generate_visualizations: true
+save_all_clusters: false

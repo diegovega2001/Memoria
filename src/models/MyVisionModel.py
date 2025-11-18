@@ -411,6 +411,7 @@ class MultiViewVisionModel(nn.Module):
                 'val_loss': [], 
                 'val_accuracy': [],
                 'val_recall@1': [],
+                'val_recall@3': [],
                 'val_recall@5': []
             }
             
@@ -464,8 +465,9 @@ class MultiViewVisionModel(nn.Module):
                 history['train_loss'].append(train_loss)
                 history['val_loss'].append(val_loss)
                 history['val_accuracy'].append(val_accuracy)
-                history['val_recall@1'].append(val_recalls[1] if val_recalls else None)
-                history['val_recall@5'].append(val_recalls[5] if val_recalls else None)
+                history['val_recall@1'].append(val_recalls['top1'] if val_recalls else None)
+                history['val_recall@3'].append(val_recalls['top3'] if val_recalls else None)
+                history['val_recall@5'].append(val_recalls['top5'] if val_recalls else None)
 
                 # Log de progreso
                 log_msg = (
@@ -480,7 +482,7 @@ class MultiViewVisionModel(nn.Module):
                 
                 # Mostrar Recall@K para metric learning
                 if val_recalls:
-                    log_msg += f" | Recall@1: {val_recalls[1]:.2f}% | Recall@5: {val_recalls[5]:.2f}%"
+                    log_msg += f" | Recall@1: {val_recalls['top1']:.2f}% | Recall@3: {val_recalls['top3']:.2f}% | Recall@5: {val_recalls['top5']:.2f}%"
                 
                 logging.info(log_msg)
             
@@ -608,83 +610,122 @@ class MultiViewVisionModel(nn.Module):
                 pbar.set_postfix({'loss': f'{loss.item():.4f}'})
 
         return total_loss / num_batches
-
+    
     def _validate_epoch(
-        self, 
-        criterion: nn.Module, 
-        epoch: int, 
+         self,
+        criterion: nn.Module,
+        epoch: int,
         total_epochs: int,
-    ) -> Tuple[float, float]:
-        """Ejecuta una época de validación."""
+    ):
         self.model.eval()
         if self.head_layer is not None:
             self.head_layer.eval()
 
         total_loss = 0.0
-        correct = 0
-        total_samples = 0
+        correct_cls = 0
+        total_cls_samples = 0
 
-        all_embeddings = []
-        all_labels = []
+        # para metric learning
+        running_emb = []
+        running_lbl = []
 
         with torch.no_grad():
-            with tqdm(self.val_loader, desc=f'Epoch {epoch+1}/{total_epochs} [Val]', leave=False) as pbar:
+            with tqdm(self.val_loader, desc=f"Epoch {epoch+1}/{total_epochs} [Val]", leave=False) as pbar:
                 for batch in pbar:
-                    images = batch['images'].to(self.device)
-                    labels = batch['labels'].to(self.device)
 
-                    # Forward pass - extraer embeddings
-                    # Manejar múltiples vistas
+                    images = batch["images"].to(self.device)
+                    labels = batch["labels"].to(self.device)
+
+                    # multi-view
                     if images.ndim == 4:
                         images = images.unsqueeze(1)
-                    
+
                     B, V, C, H, W = images.shape
-                    images_reshaped = images.view(B * V, C, H, W)
-                    features = self.model(images_reshaped)
-                    features = features.view(B, V, -1)
-                    # Concatenar vistas (no promediar) para preservar información
-                    embeddings = features.flatten(start_dim=1)  # [B, V*embedding_dim]
-                    
-                    # Calcular pérdida según el objetivo
-                    if self.objective == 'classification':
-                        outputs = self.head_layer(embeddings)
+                    flat_img = images.view(B * V, C, H, W)
+
+                    feats = self.model(flat_img)
+                    feats = feats.view(B, V, -1)
+                    emb = feats.flatten(start_dim=1)
+
+                    # ---- LOSS ----
+                    if self.objective == "classification":
+                        outputs = self.head_layer(emb)
                         loss = criterion(outputs, labels)
-                        _, predicted = outputs.max(1)
-                    elif self.objective == 'metric_learning':
-                        loss = criterion(embeddings, labels)
-                        predicted = torch.zeros_like(labels)
-                        all_embeddings.append(embeddings.cpu())
-                        all_labels.append(labels.cpu())
+                        total_loss += loss.item()
+
+                        preds = outputs.argmax(1)
+                        correct_cls += (preds == labels).sum().item()
+                        total_cls_samples += labels.size(0)
+
+                        acc = 100 * correct_cls / max(1, total_cls_samples)
+                        pbar.set_postfix({"loss": f"{(total_loss/ (pbar.n+1)):.4f}",
+                                      "acc": f"{acc:.2f}%"})
+
                     else:
-                        raise VisionModelError(f"Objetivo '{self.objective}' no reconocido")
+                        # metric learning loss
+                        loss = criterion(emb, labels)
+                        total_loss += loss.item()
 
-                    total_loss += loss.item()
-                    
-                    # Accuracy
-                    total_samples += labels.size(0)
-                    correct += (predicted == labels).sum().item()
-                    
-                    current_acc = 100 * correct / total_samples
-                    pbar.set_postfix({'acc': f'{current_acc:.2f}%'})
+                        # ---- RECALL EN TIEMPO REAL ----
+                        running_emb.append(emb.cpu())
+                        running_lbl.append(labels.cpu())
 
-        avg_loss = total_loss / len(self.val_loader)
+                        # se necesita al menos 5 elementos para top5
+                        if len(running_emb) > 1:
 
-        if self.objective == 'metric_learning':
-            # No calculamos accuracy aquí, solo loss
-            # Las métricas de recall se calculan con evaluate() si se necesita
-            accuracy = 0.0
-        else:
-            accuracy = 100 * correct / total_samples
-        
-        recalls = {}  # Puede calcularse con evaluate() después si se necesita
+                            all_e = F.normalize(torch.cat(running_emb, dim=0), p=2, dim=1)
+                            all_l = torch.cat(running_lbl, dim=0)
 
-        return avg_loss, accuracy, recalls
+                            # distancias entre todos contra todos
+                            dist = torch.cdist(all_e, all_e, p=2)
+
+                            # ignoramos self-distance poniendo +inf en diagonal
+                            dist.fill_diagonal_(float("inf"))
+
+                            # top-5 vecinos
+                            _, idx = torch.topk(dist, k=5, largest=False)
+
+                            recalls = {}
+                            for k in [1, 3, 5]:
+                                topk = all_l[idx[:, :k]]
+                                correct_k = (topk == all_l.unsqueeze(1)).any(dim=1).float().mean().item()
+                                recalls[f"top{k}"] = correct_k * 100
+
+                            pbar.set_postfix({
+                                "loss": f"{(total_loss / (pbar.n + 1)):.4f}",
+                                "top1": f"{recalls['top1']:.2f}%",
+                                "top3": f"{recalls['top3']:.2f}%",
+                                "top5": f"{recalls['top5']:.2f}%"
+                            })
+
+            avg_loss = total_loss / len(self.val_loader)
+
+            if self.objective == "classification":
+                final_acc = 100 * correct_cls / total_cls_samples
+                return avg_loss, final_acc, None
+
+            else:
+                # recalls finales
+                all_e = F.normalize(torch.cat(running_emb, dim=0), p=2, dim=1)
+                all_l = torch.cat(running_lbl, dim=0)
+
+                dist = torch.cdist(all_e, all_e, p=2)
+                dist.fill_diagonal_(float("inf"))
+                _, idx = torch.topk(dist, k=5, largest=False)
+
+                final_recalls = {}
+                for k in [1, 3, 5]:
+                    topk = all_l[idx[:, :k]]
+                    correct_k = (topk == all_l.unsqueeze(1)).any(dim=1).float().mean().item()
+                    final_recalls[f"top{k}"] = correct_k * 100
+
+                return avg_loss, 0.0, final_recalls
 
     def evaluate(
         self, 
         dataloader: Optional[DataLoader] = None,
         distance_metric: str = 'cosine',
-        k_values: List[int] = [1, 5, 10]
+        k_values: List[int] = [1, 3, 5]
     ) -> Dict[str, float]:
         """
         Evalúa el modelo usando pytorch-metric-learning inference.
@@ -751,21 +792,6 @@ class MultiViewVisionModel(nn.Module):
         
         elif self.objective == 'metric_learning':
             # Metric Learning: usar pytorch-metric-learning.utils.inference
-            # Crear función de embedding que usa nuestro modelo
-            def embedding_func(images):
-                """Función wrapper para extraer embeddings."""
-                with torch.no_grad():
-                    if images.ndim == 4:
-                        images = images.unsqueeze(1)
-                    
-                    B, V, C, H, W = images.shape
-                    images_reshaped = images.view(B * V, C, H, W)
-                    features = self.model(images_reshaped)
-                    features = features.view(B, V, -1)
-                    embeddings = features.flatten(start_dim=1)
-                    return embeddings
-
-            # Configurar métrica de distancia
             if distance_metric == 'cosine':
                 distance = CosineSimilarity()
             elif distance_metric == 'euclidean':
@@ -781,8 +807,14 @@ class MultiViewVisionModel(nn.Module):
                 for batch in tqdm(self.train_loader, desc='Extracting reference embeddings', leave=False):
                     images = batch['images'].to(self.device)
                     labels = batch['labels']
-                    emb = embedding_func(images)
-                    reference_embeddings.append(emb.cpu())
+                    if images.ndim == 4:
+                        images = images.unsqueeze(1)
+                    B, V, C, H, W = images.shape
+                    images_reshaped = images.view(B * V, C, H, W)
+                    features = self.model(images_reshaped)
+                    features = features.view(B, V, -1)
+                    embeddings = features.flatten(start_dim=1)
+                    reference_embeddings.append(embeddings.cpu())
                     reference_labels.append(labels)
 
             reference_embeddings = torch.cat(reference_embeddings, dim=0)
@@ -816,13 +848,10 @@ class MultiViewVisionModel(nn.Module):
             
             # Accuracy como recall@1
             results['accuracy'] = results.get('recall@1', 0.0)
-            
-            return results
-        
+            return results 
+
         else:
             raise VisionModelError(f"Objective '{self.objective}' no reconocido")
-    
-
 
     def save_model(self, save_path: Union[str, Path], **kwargs) -> None:
         """

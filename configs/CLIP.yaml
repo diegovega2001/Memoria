@@ -1,21 +1,20 @@
 # ===== DATASET =====
-views: ['front', 'rear']
+views: ['front']
 class_granularity: 'model+year'
-min_images: 10
-train_ratio: 0.2
-val_ratio: 0.2
-test_ratio: 0.6
+min_images: 8
+train_ratio: 0.7
+val_ratio: 0.15
+test_ratio: 0.15
 seed: 3
 image_size: [224, 224]
-grayscale: false
+grayscale: true
 use_bbox: true
 augment: true
 include_oneshot_in_test: true
-oneshot_ratio: 0.01
+oneshot_ratio: 1.0
 
 # Text descriptions for CLIP
-# Options: '' (basic), 'make', 'model', 'full'
-description_include: 'model'
+description_include: 'full'
 
 # ===== MODELO =====
 model_type: 'multimodal'
@@ -24,57 +23,57 @@ objective: 'CLIP'
 
 # ===== TRAINING =====
 sampling_strategy: 'standard'
-batch_size: 32
-num_workers: 0
-pin_memory: false
-device: 'cpu'
+batch_size: 128
+num_workers: 2
+pin_memory: true
+device: 'cuda'
 
 # Fine-tuning optimizer settings
-finetune_optimizer_type: 'Adam'
-finetune_optimizer_weight_decay: 0
+finetune_optimizer_type: 'AdamW'
+finetune_optimizer_weight_decay: 1.0e-2
 
 # Mixed precision training
-use_amp: false
+use_amp: True
 
 # ===== CLIP FINE-TUNING PHASES =====
 clip_finetuning_phases:
   phase_1_vision:
     type: 'vision'
-    lr: 1e-2
-    epochs: 1
-    early_stopping: null
+    lr: 1.0e-6
+    epochs: 120
+    early_stopping: {'patience': 20}
     save_best: true
-    warmup_steps: 50
+    warmup_steps: 100
     num_vision_layers: -1  
   
   phase_2_projection:
     type: 'projection'
-    lr: 1e-2
-    epochs: 1
-    early_stopping: null
+    lr: 1.0e-5
+    epochs: 50
+    early_stopping: {'patience': 15}
     save_best: true
-    warmup_steps: 50
+    warmup_steps: 200
   
   phase_3_text:
     type: 'text'
-    lr: 1e-2
-    epochs: 1
-    early_stopping: null
+    lr: 1.0e-7
+    epochs: 100
+    early_stopping: {'patience': 15}
     save_best: true
-    warmup_steps: 50
+    warmup_steps: 200
   
   phase_4_projection_refine:
     type: 'projection_refine'
-    lr: 1e-2
-    epochs: 1
-    early_stopping: null
+    lr: 5.0e-6
+    epochs: 50
+    early_stopping: {'patience': 10}
     save_best: true
-    warmup_steps: 50
+    warmup_steps: 200
 
 # ===== EMBEDDINGS ANALYSIS =====
-reducer_trials: 1
+reducer_trials: 50
 reducer_methods: ['pca', 'umap', 'tsne']
-clustering_trials: 10
+clustering_trials: 200
 clustering_methods: ['dbscan', 'hdbscan', 'optics', 'agglomerative']
 n_jobs: -1
 use_incremental: true
