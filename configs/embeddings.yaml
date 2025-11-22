@@ -1,0 +1,19 @@
+# ===== EMBEDDINGS ANALYSIS CONFIGURATION =====
+# Configuración universal para análisis de embeddings
+# Esta configuración se aplica a todos los experimentos de embeddings
+
+# Dimensionality reduction
+reducer_trials: 50
+reducer_methods: ['pca', 'umap', 'tsne']
+
+# Clustering
+clustering_trials: 200
+clustering_methods: ['dbscan', 'hdbscan', 'optics', 'agglomerative']
+
+# Performance
+n_jobs: -1
+use_incremental: true
+
+# Visualization
+generate_visualizations: true
+save_all_clusters: false
